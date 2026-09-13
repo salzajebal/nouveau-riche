@@ -15,9 +15,32 @@ set -a
 source "$ENV_FILE"
 set +a
 
-npm ci \
-  --registry=https://registry.npmjs.org \
-  --replace-registry-host=always
+LOCK_BACKUP="$(mktemp)"
+cp package-lock.json "$LOCK_BACKUP"
+restore_package_lock() {
+  cp "$LOCK_BACKUP" package-lock.json
+  rm -f "$LOCK_BACKUP"
+}
+trap restore_package_lock EXIT
+
+node -e '
+  const fs = require("node:fs");
+  const path = "package-lock.json";
+  const lock = fs.readFileSync(path, "utf8")
+    .replaceAll("http://package-firewall.replit.internal/npm/", "https://registry.npmjs.org/")
+    .replaceAll("http://package-firewall.replit.local/npm/", "https://registry.npmjs.org/");
+  fs.writeFileSync(path, lock);
+'
+
+if grep -q 'package-firewall\.replit' package-lock.json; then
+  echo "package-lock.json에 Replit 내부 npm 주소가 남아 있습니다." >&2
+  exit 1
+fi
+
+npm ci --registry=https://registry.npmjs.org
+restore_package_lock
+trap - EXIT
+
 npm run db:migrate
 npm run build
 
