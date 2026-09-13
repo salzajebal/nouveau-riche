@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { STOCK_CATEGORIES, KOREAN_BANKS } from "@shared/schema";
 import { StockIcon } from "@/components/stock-icon";
-import type { User, StockTransaction, TransferRequest, IpoStock, DomainGroup, LoginLog, BlockedIp, StockMemberTransfer, UnionCode, DomainFallbackUrl, WithdrawRequest } from "@shared/schema";
+import type { User, StockTransaction, TransferRequest, IpoStock, StockCatalog, DomainGroup, LoginLog, BlockedIp, StockMemberTransfer, UnionCode, DomainFallbackUrl, WithdrawRequest } from "@shared/schema";
 import { mergeChatSnapshot } from "@shared/chat-security";
 import {
   LogOut, Users, Package, ArrowDownRight, ArrowUpRight,
@@ -1296,6 +1296,168 @@ function StocksManagementSection({
   );
 }
 
+function StockCodeManagementSection() {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<StockCatalog | null>(null);
+  const [form, setForm] = useState({
+    stockName: "", stockCode: "", purchasePrice: "", ipoPrice: "",
+    category: "일반", isActive: true,
+  });
+
+  const { data: stocks = [], isLoading } = useQuery<StockCatalog[]>({
+    queryKey: ["/api/admin/stock-catalog"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+  });
+  const filtered = stocks.filter((stock) => {
+    const term = search.trim().toLowerCase();
+    return !term || stock.stockName.toLowerCase().includes(term) || stock.stockCode.toLowerCase().includes(term);
+  });
+  const reset = () => {
+    setForm({ stockName: "", stockCode: "", purchasePrice: "", ipoPrice: "", category: "일반", isActive: true });
+  };
+  const openAdd = () => {
+    setEditing(null); reset(); setDialogOpen(true);
+  };
+  const openEdit = (stock: StockCatalog) => {
+    setEditing(stock);
+    setForm({
+      stockName: stock.stockName,
+      stockCode: stock.stockCode,
+      purchasePrice: String(stock.purchasePrice),
+      ipoPrice: String(stock.ipoPrice),
+      category: stock.category,
+      isActive: stock.isActive,
+    });
+    setDialogOpen(true);
+  };
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["/api/admin/stock-catalog"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/available-stocks"] });
+  };
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      if (!form.stockName.trim()) throw new Error("종목명을 입력해주세요.");
+      const purchasePrice = Number(form.purchasePrice);
+      const ipoPrice = Number(form.ipoPrice);
+      if (!Number.isInteger(purchasePrice) || purchasePrice < 0 || !Number.isInteger(ipoPrice) || ipoPrice < 0) {
+        throw new Error("매입가와 공모가는 0 이상의 정수로 입력해주세요.");
+      }
+      const data = {
+        stockName: form.stockName.trim(),
+        stockCode: form.stockCode.trim(),
+        purchasePrice,
+        ipoPrice,
+        category: form.category,
+        isActive: form.isActive,
+      };
+      if (editing) await apiRequest("PATCH", `/api/admin/stock-catalog/${editing.id}`, data);
+      else await apiRequest("POST", "/api/admin/stock-catalog", data);
+    },
+    onSuccess: () => {
+      invalidate(); setDialogOpen(false);
+      toast({ title: editing ? "종목코드 수정 완료" : "종목코드 추가 완료" });
+    },
+    onError: (error: Error) => toast({ title: "오류", description: error.message, variant: "destructive" }),
+  });
+  const toggleMutation = useMutation({
+    mutationFn: async (stock: StockCatalog) => {
+      await apiRequest("PATCH", `/api/admin/stock-catalog/${stock.id}`, { isActive: !stock.isActive });
+    },
+    onSuccess: invalidate,
+    onError: (error: Error) => toast({ title: "오류", description: error.message, variant: "destructive" }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/admin/stock-catalog/${id}`),
+    onSuccess: () => { invalidate(); toast({ title: "종목코드 삭제 완료" }); },
+    onError: (error: Error) => toast({ title: "오류", description: error.message, variant: "destructive" }),
+  });
+
+  const actionButtons = (stock: StockCatalog) => (
+    <div className="flex items-center gap-1">
+      <Button size="sm" variant="outline" className="text-xs" onClick={() => openEdit(stock)} data-testid={`button-edit-stock-code-${stock.id}`}>
+        <Pencil className="w-3 h-3 mr-1" />수정
+      </Button>
+      <Button size="sm" variant="outline" className={`text-xs ${stock.isActive ? "text-orange-600" : "text-green-600"}`} onClick={() => toggleMutation.mutate(stock)} disabled={toggleMutation.isPending} data-testid={`button-toggle-stock-code-${stock.id}`}>
+        {stock.isActive ? "비활성화" : "활성화"}
+      </Button>
+      <Button size="sm" variant="ghost" className="text-xs text-red-600" onClick={() => { if (window.confirm("이 종목코드를 삭제하시겠습니까?")) deleteMutation.mutate(stock.id); }} disabled={deleteMutation.isPending} data-testid={`button-delete-stock-code-${stock.id}`}>
+        <Trash2 className="w-3 h-3 mr-1" />삭제
+      </Button>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4" data-testid="section-stock-code-management">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-base sm:text-lg font-bold text-gray-900">종목코드 관리</h2>
+          <p className="text-xs sm:text-sm text-gray-500 mt-1">회원 화면의 입고 가능 종목과 종목별 가격을 관리합니다.</p>
+        </div>
+        <Button className="bg-[#03C75A] border-[#03C75A]" onClick={openAdd} data-testid="button-add-stock-code"><Plus className="w-4 h-4 mr-1" />종목 추가</Button>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Input className="pl-9" placeholder="종목명 또는 종목코드 검색" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="input-search-stock-codes" />
+        </div>
+        <Badge variant="outline">{filtered.length}건</Badge>
+      </div>
+      {isLoading ? <div className="space-y-2">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full" />)}</div> :
+        filtered.length === 0 ? <Card className="p-12 text-center text-sm text-gray-500">등록된 종목코드가 없습니다.</Card> : (
+          <>
+            <div className="md:hidden space-y-3">
+              {filtered.map((stock) => (
+                <Card key={stock.id} className={`p-4 space-y-3 ${!stock.isActive ? "opacity-60" : ""}`} data-testid={`card-stock-code-${stock.id}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div><p className="font-bold text-gray-900">{stock.stockName}</p><p className="text-xs text-gray-500 font-mono">{stock.stockCode || "코드 없음"}</p></div>
+                    <Badge variant={stock.isActive ? "default" : "secondary"} className={stock.isActive ? "bg-green-600 border-green-600" : ""}>{stock.isActive ? "활성" : "비활성"}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
+                    <span>매입가: {stock.purchasePrice.toLocaleString()}원</span><span>공모가: {stock.ipoPrice.toLocaleString()}원</span><span>분류: {stock.category}</span>
+                  </div>
+                  {actionButtons(stock)}
+                </Card>
+              ))}
+            </div>
+            <Card className="hidden md:block p-0 overflow-hidden">
+              <div className="overflow-x-auto"><Table>
+                <TableHeader><TableRow className="bg-gray-50">
+                  <TableHead>종목명</TableHead><TableHead>종목코드</TableHead><TableHead>분류</TableHead>
+                  <TableHead className="text-right">매입가</TableHead><TableHead className="text-right">공모가</TableHead>
+                  <TableHead className="text-center">상태</TableHead><TableHead className="text-center">관리</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>{filtered.map((stock) => <TableRow key={stock.id} className={!stock.isActive ? "opacity-60" : ""} data-testid={`row-stock-code-${stock.id}`}>
+                  <TableCell className="font-medium">{stock.stockName}</TableCell><TableCell className="font-mono">{stock.stockCode || "-"}</TableCell><TableCell>{stock.category}</TableCell>
+                  <TableCell className="text-right tabular-nums">{stock.purchasePrice.toLocaleString()}원</TableCell><TableCell className="text-right tabular-nums">{stock.ipoPrice.toLocaleString()}원</TableCell>
+                  <TableCell className="text-center"><Badge variant={stock.isActive ? "default" : "secondary"} className={stock.isActive ? "bg-green-600 border-green-600" : ""}>{stock.isActive ? "활성" : "비활성"}</Badge></TableCell>
+                  <TableCell><div className="flex justify-center">{actionButtons(stock)}</div></TableCell>
+                </TableRow>)}</TableBody>
+              </Table></div>
+            </Card>
+          </>
+        )}
+      <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) { setEditing(null); reset(); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{editing ? "종목코드 수정" : "종목코드 추가"}</DialogTitle><DialogDescription>종목명, 코드와 가격 정보를 입력하세요.</DialogDescription></DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1"><Label>종목명</Label><Input value={form.stockName} onChange={(e) => setForm({ ...form, stockName: e.target.value })} placeholder="예: 마키나락스" data-testid="input-stock-code-name" /></div>
+            <div className="space-y-1"><Label>종목코드</Label><Input value={form.stockCode} onChange={(e) => setForm({ ...form, stockCode: e.target.value })} placeholder="예: 005930" data-testid="input-stock-code-code" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label>매입 가격</Label><Input type="number" min="0" value={form.purchasePrice} onChange={(e) => setForm({ ...form, purchasePrice: e.target.value })} data-testid="input-stock-code-purchase-price" /></div>
+              <div className="space-y-1"><Label>IPO 가격</Label><Input type="number" min="0" value={form.ipoPrice} onChange={(e) => setForm({ ...form, ipoPrice: e.target.value })} data-testid="input-stock-code-ipo-price" /></div>
+            </div>
+            <div className="space-y-1"><Label>카테고리</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger data-testid="select-stock-code-category"><SelectValue /></SelectTrigger><SelectContent>{STOCK_CATEGORIES.map((cat) => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}</SelectContent></Select></div>
+            <div className="flex items-center justify-between rounded-md border p-3"><Label>활성 상태</Label><Button type="button" size="sm" variant={form.isActive ? "default" : "outline"} onClick={() => setForm({ ...form, isActive: !form.isActive })}>{form.isActive ? "활성" : "비활성"}</Button></div>
+          </div>
+          <DialogFooter><Button variant="outline" onClick={() => setDialogOpen(false)}>취소</Button><Button className="bg-[#03C75A] border-[#03C75A]" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>{saveMutation.isPending ? "저장 중..." : "저장"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 type PopularIpoStock = {
   id: string;
   stockName: string;
@@ -1662,7 +1824,7 @@ function MaintenanceToggleCard() {
   );
 }
 
-type AdminSection = "dashboard" | "members" | "transactions" | "transfers" | "member-transfers" | "withdraw-requests" | "stocks" | "chat" | "groups" | "logs" | "ipblock" | "unioncodes" | "domainlinks";
+type AdminSection = "dashboard" | "members" | "transactions" | "transfers" | "member-transfers" | "withdraw-requests" | "stocks" | "stockcodes" | "chat" | "groups" | "logs" | "ipblock" | "unioncodes" | "domainlinks";
 
 const sidebarItems: { id: AdminSection; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "dashboard", label: "대시보드", icon: LayoutDashboard },
@@ -1672,6 +1834,7 @@ const sidebarItems: { id: AdminSection; label: string; icon: typeof LayoutDashbo
   { id: "member-transfers", label: "주식 이전 관리", icon: Send },
   { id: "withdraw-requests", label: "출금신청 관리", icon: Banknote },
   { id: "stocks", label: "종목 관리", icon: Package },
+  { id: "stockcodes", label: "종목코드", icon: BookOpen },
   { id: "chat", label: "1:1 상담", icon: MessageSquare },
   { id: "groups", label: "도메인 그룹", icon: Globe },
   { id: "logs", label: "접속 로그", icon: Activity },
@@ -1684,7 +1847,7 @@ export default function AdminPage() {
   const [, setLocation] = useLocation();
   const getHashSection = (): AdminSection => {
     const hash = window.location.hash.replace("#", "");
-    const valid: AdminSection[] = ["dashboard", "members", "transactions", "transfers", "member-transfers", "withdraw-requests", "stocks", "chat", "groups", "logs", "ipblock", "unioncodes", "domainlinks"];
+    const valid: AdminSection[] = ["dashboard", "members", "transactions", "transfers", "member-transfers", "withdraw-requests", "stocks", "stockcodes", "chat", "groups", "logs", "ipblock", "unioncodes", "domainlinks"];
     return valid.includes(hash as AdminSection) ? (hash as AdminSection) : "dashboard";
   };
 
@@ -4333,6 +4496,8 @@ export default function AdminPage() {
               <PopularIpoManagementSection />
             </>
           )}
+
+          {activeSection === "stockcodes" && <StockCodeManagementSection />}
 
           {activeSection === "chat" && (
             <>

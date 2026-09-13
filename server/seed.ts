@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { users, transferRequests, stockTransactions, unionCodes, ipoStocks } from "@shared/schema";
+import { users, transferRequests, stockTransactions, unionCodes, ipoStocks, stockCatalog } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { log } from "./index";
 import bcrypt from "bcrypt";
@@ -131,6 +131,29 @@ export async function seedDatabase() {
         await db.insert(unionCodes).values({ code, label, isActive: true });
         log(`Union code created: ${code}`);
       }
+    }
+
+    // 기존 /api/available-stocks 하드코드 목록을 최초 1회만 카탈로그로
+    // 옮깁니다. onConflictDoNothing으로 운영자가 수정한 값은 절대 덮어쓰지 않습니다.
+    const defaultCatalog = [
+      { stockName: "마키나락스", purchasePrice: 500, ipoPrice: 500 },
+      { stockName: "피스피스스튜디오", purchasePrice: 100, ipoPrice: 100 },
+      { stockName: "매드업", purchasePrice: 100, ipoPrice: 100 },
+      { stockName: "두나무", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "토스", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "야놀자", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "컬리", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "당근", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "무신사", purchasePrice: 0, ipoPrice: 0 },
+      { stockName: "케이뱅크", purchasePrice: 0, ipoPrice: 0 },
+    ];
+    const existingCatalog = await db.select({ id: stockCatalog.id }).from(stockCatalog).limit(1);
+    if (existingCatalog.length === 0) {
+      await db.insert(stockCatalog).values(defaultCatalog.map((stock) => ({
+        ...stock,
+        category: "일반",
+        isActive: true,
+      }))).onConflictDoNothing();
     }
 
     // 브릴스 IPO 종목은 한 번만 등록합니다.

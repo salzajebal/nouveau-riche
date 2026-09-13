@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { registerSchema, loginSchema, insertStockTransactionSchema, updateUserSchema, insertTransferRequestSchema, insertStockMemberTransferSchema, insertChatMacroSchema, insertPopularIpoStockSchema, chatMessages, chatRooms } from "@shared/schema";
+import { registerSchema, loginSchema, insertStockTransactionSchema, updateUserSchema, insertTransferRequestSchema, insertStockMemberTransferSchema, insertChatMacroSchema, insertPopularIpoStockSchema, insertStockCatalogSchema, chatMessages, chatRooms } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcrypt";
 import { WebSocketServer, WebSocket } from "ws";
@@ -312,6 +312,7 @@ export async function registerRoutes(
           domain_groups,
           ipo_stocks,
           popular_ipo_stocks,
+          stock_catalog,
           login_logs,
           stock_member_transfers,
           stock_transactions,
@@ -341,6 +342,7 @@ export async function registerRoutes(
           domain_groups,
           ipo_stocks,
           popular_ipo_stocks,
+          stock_catalog,
           login_logs,
           stock_member_transfers,
           stock_transactions,
@@ -2226,34 +2228,116 @@ export async function registerRoutes(
   });
 
   app.get("/api/available-stocks", async (_req, res) => {
-    const stocks = [
-      { name: "마키나락스", faceValue: 500 },
-      { name: "피스피스스튜디오", faceValue: 100 },
-      { name: "매드업", faceValue: 100 },
-      { name: "두나무", faceValue: null },
-      { name: "토스", faceValue: null },
-      { name: "야놀자", faceValue: null },
-      { name: "컬리", faceValue: null },
-      { name: "당근", faceValue: null },
-      { name: "무신사", faceValue: null },
-      { name: "케이뱅크", faceValue: null },
-    ];
-    return res.json(stocks);
+    const stocks = await storage.getActiveStockCatalog();
+    // faceValue is retained for older clients; purchasePrice is the
+    // administrator-controlled equivalent for catalog entries.
+    return res.json(stocks.map((stock) => ({
+      name: stock.stockName,
+      faceValue: stock.purchasePrice > 0 ? stock.purchasePrice : null,
+      stockName: stock.stockName,
+      stockCode: stock.stockCode || null,
+      purchasePrice: stock.purchasePrice,
+      ipoPrice: stock.ipoPrice,
+      category: stock.category,
+      isActive: stock.isActive,
+      createdAt: stock.createdAt,
+      updatedAt: stock.updatedAt,
+    })));
+  });
+
+  const stockCatalogRequestSchema = insertStockCatalogSchema.extend({
+    purchasePrice: z.coerce.number().int().nonnegative("매입가는 0 이상이어야 합니다"),
+    ipoPrice: z.coerce.number().int().nonnegative("공모가는 0 이상이어야 합니다"),
+    stockCode: z.string().trim().max(50).regex(/^[A-Za-z0-9_-]*$/, "종목코드는 영문, 숫자, -, _만 사용할 수 있습니다").default(""),
+    category: z.string().trim().min(1).max(50),
+    isActive: z.boolean().optional().default(true),
+  });
+  const stockCatalogUpdateSchema = stockCatalogRequestSchema.partial();
+  const stockInRequestSchema = z.object({
+    stockName: z.string().trim().min(1, "종목명을 입력해주세요"),
+    quantity: z.coerce.number().int().positive("수량을 올바르게 입력해주세요"),
+  });
+  const isUniqueViolation = (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "23505";
+
+  app.get(["/api/admin/stock-catalog", "/api/admin/stock-codes"], requireAdmin, async (_req, res) => {
+    return res.json(await storage.getAllStockCatalog());
+  });
+
+  app.post(["/api/admin/stock-catalog", "/api/admin/stock-codes"], requireAdmin, async (req, res) => {
+    try {
+      const data = stockCatalogRequestSchema.parse(req.body);
+      const existing = await storage.getAllStockCatalog();
+      if (existing.some((stock) => stock.stockName.toLocaleLowerCase() === data.stockName.toLocaleLowerCase())) {
+        return res.status(409).json({ message: "이미 등록된 종목명입니다" });
+      }
+      if (data.stockCode && existing.some((stock) => stock.stockCode.toLocaleLowerCase() === data.stockCode.toLocaleLowerCase())) {
+        return res.status(409).json({ message: "이미 등록된 종목코드입니다" });
+      }
+      return res.status(201).json(await storage.createStockCatalog(data));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0]?.message || "입력값을 확인해주세요" });
+      }
+      if (isUniqueViolation(error)) {
+        return res.status(409).json({ message: "이미 등록된 종목명 또는 종목코드입니다" });
+      }
+      return res.status(500).json({ message: "종목코드 추가에 실패했습니다" });
+    }
+  });
+
+  app.patch(["/api/admin/stock-catalog/:id", "/api/admin/stock-codes/:id"], requireAdmin, async (req, res) => {
+    try {
+      const data = stockCatalogUpdateSchema.parse(req.body);
+      const existing = await storage.getAllStockCatalog();
+      if (data.stockName && existing.some((stock) => stock.id !== req.params.id && stock.stockName.toLocaleLowerCase() === data.stockName!.toLocaleLowerCase())) {
+        return res.status(409).json({ message: "이미 등록된 종목명입니다" });
+      }
+      if (data.stockCode && existing.some((stock) => stock.id !== req.params.id && stock.stockCode.toLocaleLowerCase() === data.stockCode!.toLocaleLowerCase())) {
+        return res.status(409).json({ message: "이미 등록된 종목코드입니다" });
+      }
+      const updated = await storage.updateStockCatalog(String(req.params.id), data);
+      if (!updated) return res.status(404).json({ message: "종목코드를 찾을 수 없습니다" });
+      return res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0]?.message || "입력값을 확인해주세요" });
+      }
+      if (isUniqueViolation(error)) {
+        return res.status(409).json({ message: "이미 등록된 종목명 또는 종목코드입니다" });
+      }
+      return res.status(500).json({ message: "종목코드 수정에 실패했습니다" });
+    }
+  });
+
+  app.delete(["/api/admin/stock-catalog/:id", "/api/admin/stock-codes/:id"], requireAdmin, async (req, res) => {
+    try {
+      const existing = await storage.getAllStockCatalog();
+      if (!existing.some((stock) => stock.id === String(req.params.id))) {
+        return res.status(404).json({ message: "종목코드를 찾을 수 없습니다" });
+      }
+      await storage.deleteStockCatalog(String(req.params.id));
+      return res.json({ message: "삭제 완료" });
+    } catch {
+      return res.status(500).json({ message: "종목코드 삭제에 실패했습니다" });
+    }
   });
 
   app.post("/api/transfer-requests/stock-in", async (req, res) => {
     if (!req.session.userId) return res.status(401).json({ message: "로그인이 필요합니다" });
     try {
-      const { stockName, quantity } = req.body;
-      if (!stockName || !quantity || parseInt(quantity) <= 0) {
-        return res.status(400).json({ message: "종목명과 수량을 입력해주세요" });
+      const { stockName, quantity } = stockInRequestSchema.parse(req.body);
+      const activeCatalog = await storage.getActiveStockCatalog();
+      const catalogStock = activeCatalog.find((stock) => stock.stockName === stockName);
+      if (!catalogStock) {
+        return res.status(400).json({ message: "입고 가능한 종목이 아닙니다" });
       }
       const user = await storage.getUser(req.session.userId);
       if (!user) return res.status(404).json({ message: "사용자를 찾을 수 없습니다" });
       const transferRequest = await storage.createTransferRequest({
         userId: req.session.userId,
-        stockName,
-        quantity: parseInt(quantity),
+        stockName: catalogStock.stockName,
+        quantity,
         accountName: user.accountHolder || user.fullName || "",
         accountNumber: user.accountNumber || "",
         brokerName: user.bank || "",
@@ -2265,6 +2349,9 @@ export async function registerRoutes(
       });
       return res.status(201).json(transferRequest);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: error.errors[0]?.message || "입력값을 확인해주세요" });
+      }
       return res.status(500).json({ message: "입고 신청에 실패했습니다" });
     }
   });

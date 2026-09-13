@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type StockTransaction, type InsertStockTransaction, type TransferRequest, type InsertTransferRequest, type ChatRoom, type ChatMessage, type InsertChatMessage, type ChatMacro, type InsertChatMacro, type IpoStock, type InsertIpoStock, type PopularIpoStock, type InsertPopularIpoStock, type Watchlist, type DomainGroup, type LoginLog, type DomainFallbackUrl, type InsertDomainFallbackUrl, type BlockedIp, type StockMemberTransfer, type InsertStockMemberTransfer, type UnionCode, type WithdrawRequest, type InsertWithdrawRequest, users, stockTransactions, transferRequests, chatRooms, chatMessages, chatMacros, ipoStocks, popularIpoStocks, watchlist, domainGroups, loginLogs, domainFallbackUrls, blockedIps, stockMemberTransfers, unionCodes, withdrawRequests } from "@shared/schema";
+import { type User, type InsertUser, type StockTransaction, type InsertStockTransaction, type TransferRequest, type InsertTransferRequest, type ChatRoom, type ChatMessage, type InsertChatMessage, type ChatMacro, type InsertChatMacro, type IpoStock, type InsertIpoStock, type PopularIpoStock, type InsertPopularIpoStock, type StockCatalog, type InsertStockCatalog, type Watchlist, type DomainGroup, type LoginLog, type DomainFallbackUrl, type InsertDomainFallbackUrl, type BlockedIp, type StockMemberTransfer, type InsertStockMemberTransfer, type UnionCode, type WithdrawRequest, type InsertWithdrawRequest, users, stockTransactions, stockCatalog, transferRequests, chatRooms, chatMessages, chatMacros, ipoStocks, popularIpoStocks, watchlist, domainGroups, loginLogs, domainFallbackUrls, blockedIps, stockMemberTransfers, unionCodes, withdrawRequests } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, sql, asc, inArray } from "drizzle-orm";
 
@@ -31,6 +31,11 @@ export interface IStorage {
   updateTransaction(id: string, data: Partial<Pick<StockTransaction, "quantity" | "pricePerShare" | "memo" | "category" | "createdAt">>): Promise<StockTransaction | undefined>;
   toggleTransactionHidden(id: string): Promise<StockTransaction | undefined>;
   deleteTransaction(id: string): Promise<void>;
+  getAllStockCatalog(): Promise<StockCatalog[]>;
+  getActiveStockCatalog(): Promise<StockCatalog[]>;
+  createStockCatalog(data: InsertStockCatalog): Promise<StockCatalog>;
+  updateStockCatalog(id: string, data: Partial<InsertStockCatalog>): Promise<StockCatalog | undefined>;
+  deleteStockCatalog(id: string): Promise<void>;
   createTransferRequest(data: InsertTransferRequest): Promise<TransferRequest>;
   getTransferRequest(id: string): Promise<TransferRequest | undefined>;
   getTransferRequestsByUserId(userId: string): Promise<TransferRequest[]>;
@@ -233,6 +238,33 @@ export class DatabaseStorage implements IStorage {
 
   async deleteTransaction(id: string): Promise<void> {
     await db.delete(stockTransactions).where(eq(stockTransactions.id, id));
+  }
+
+  async getAllStockCatalog(): Promise<StockCatalog[]> {
+    return db.select().from(stockCatalog).orderBy(asc(stockCatalog.stockName));
+  }
+
+  async getActiveStockCatalog(): Promise<StockCatalog[]> {
+    return db.select().from(stockCatalog)
+      .where(eq(stockCatalog.isActive, true))
+      .orderBy(asc(stockCatalog.stockName));
+  }
+
+  async createStockCatalog(data: InsertStockCatalog): Promise<StockCatalog> {
+    const [stock] = await db.insert(stockCatalog).values(data).returning();
+    return stock;
+  }
+
+  async updateStockCatalog(id: string, data: Partial<InsertStockCatalog>): Promise<StockCatalog | undefined> {
+    const [stock] = await db.update(stockCatalog)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(stockCatalog.id, id))
+      .returning();
+    return stock;
+  }
+
+  async deleteStockCatalog(id: string): Promise<void> {
+    await db.delete(stockCatalog).where(eq(stockCatalog.id, id));
   }
 
   async createTransferRequest(data: InsertTransferRequest): Promise<TransferRequest> {

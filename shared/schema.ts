@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -38,6 +38,25 @@ export const stockTransactions = pgTable("stock_transactions", {
   hidden: boolean("hidden").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+// 종목 코드/가격 카탈로그. 종목명으로 기존 거래 내역과 호환하며
+// stockCode가 없는 비상장 종목은 빈 문자열을 저장합니다.
+export const stockCatalog = pgTable("stock_catalog", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  stockName: text("stock_name").notNull(),
+  stockCode: text("stock_code").notNull().default(""),
+  purchasePrice: integer("purchase_price").notNull().default(0),
+  ipoPrice: integer("ipo_price").notNull().default(0),
+  category: text("category").notNull().default("일반"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => ({
+  stockNameCiUnique: uniqueIndex("stock_catalog_stock_name_ci_unique").on(sql`lower(${table.stockName})`),
+  stockCodeCiUnique: uniqueIndex("stock_catalog_stock_code_ci_unique")
+    .on(sql`lower(${table.stockCode})`)
+    .where(sql`${table.stockCode} <> ''`),
+}));
 
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -139,6 +158,19 @@ export const insertStockTransactionSchema = createInsertSchema(stockTransactions
   createdAt: true,
 });
 
+export const insertStockCatalogSchema = createInsertSchema(stockCatalog).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  stockName: z.string().trim().min(1, "종목명을 입력해주세요").max(200),
+  stockCode: z.string().trim().max(50).default(""),
+  purchasePrice: z.number().int().nonnegative("매입가는 0 이상이어야 합니다"),
+  ipoPrice: z.number().int().nonnegative("공모가는 0 이상이어야 합니다"),
+  category: z.string().trim().min(1).max(50),
+  isActive: z.boolean().optional().default(true),
+});
+
 export const insertTransferRequestSchema = createInsertSchema(transferRequests).omit({
   id: true,
   status: true,
@@ -155,6 +187,8 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type StockTransaction = typeof stockTransactions.$inferSelect;
 export type InsertStockTransaction = z.infer<typeof insertStockTransactionSchema>;
+export type StockCatalog = typeof stockCatalog.$inferSelect;
+export type InsertStockCatalog = z.infer<typeof insertStockCatalogSchema>;
 export type TransferRequest = typeof transferRequests.$inferSelect;
 export type InsertTransferRequest = z.infer<typeof insertTransferRequestSchema>;
 export type ChatRoom = typeof chatRooms.$inferSelect;
