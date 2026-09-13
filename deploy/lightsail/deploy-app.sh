@@ -37,7 +37,9 @@ if grep -q 'package-firewall\.replit' package-lock.json; then
   exit 1
 fi
 
-npm ci --registry=https://registry.npmjs.org
+npm ci \
+  --include=dev \
+  --registry=https://registry.npmjs.org
 restore_package_lock
 trap - EXIT
 
