@@ -1,4 +1,4 @@
 - [입고 건별 보유단가](holding-lot-accounting.md) — 같은 종목도 입고 건별 단가를 합치지 않고 표시하며, 출고는 오래된 입고분부터 차감한다.
 - [상담 메시지 회수](chat-message-recall.md) — 관리자 메시지는 회원 화면에 표시되기 전까지만 회수하며, 읽음은 표시된 메시지 ID별로 기록한다.
 - [IPO 원본 레이아웃 유지](ipo-original-layout.md) — 캘린더·인기종목·FAQ는 원본 메뉴와 섹션 구조를 유지하고 데이터와 문구만 연동한다.
-- [Lightsail 배포 주의점](lightsail-deployment-quirks.md) — 운영 설치에는 dev 의존성이 필요하며 PM2 데몬은 systemd가 직접 시작해야 한다.
+- [Lightsail 배포 주의점](lightsail-deployment-quirks.md) — dev 의존성, 비파괴 DB 변경, systemd 직접 PM2 시작 원칙을 지킨다.
