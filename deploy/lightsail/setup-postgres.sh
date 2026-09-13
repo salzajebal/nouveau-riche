@@ -38,7 +38,7 @@ sudo -u postgres psql --set=ON_ERROR_STOP=1 --dbname="$DB_NAME" \
 sudo -u postgres psql --set=ON_ERROR_STOP=1 --dbname="$DB_NAME" \
   -c "GRANT ALL ON SCHEMA public TO \"$DB_USER\";"
 
-ENCODED_PASSWORD="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=\"\"))' "$DB_PASSWORD")"
+ENCODED_PASSWORD="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$DB_PASSWORD")"
 echo
 echo "PostgreSQL 준비 완료"
 echo "DATABASE_URL=postgresql://${DB_USER}:${ENCODED_PASSWORD}@localhost:5432/${DB_NAME}"
