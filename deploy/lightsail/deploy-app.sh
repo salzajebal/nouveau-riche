@@ -15,7 +15,9 @@ set -a
 source "$ENV_FILE"
 set +a
 
-npm ci
+npm ci \
+  --registry=https://registry.npmjs.org \
+  --replace-registry-host=always
 npm run db:migrate
 npm run build
 
