@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "OLRZtnNcbD0EZhTIi8gai"
+uri = "file://client/public/og-image.png"
+type = "image"
+title = "npay-bisangchan-app-icon"

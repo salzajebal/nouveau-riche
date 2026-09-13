@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /api/
+Disallow: /chat
+
+Sitemap: https://ustock-plus.net/sitemap.xml
