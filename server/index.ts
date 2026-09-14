@@ -64,12 +64,18 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  const { seedDatabase, repairApprovedTransfers, repairWrongPurchasePrices } = await import("./seed");
   await registerRoutes(httpServer, app);
 
-  await seedDatabase();
-  await repairApprovedTransfers();
-  await repairWrongPurchasePrices();
+  // 운영 서버 재시작과 배포는 기존 데이터를 절대 변경하지 않습니다.
+  // 초기 데이터 생성 및 과거 거래 보정은 개발 환경에서만 실행합니다.
+  if (process.env.NODE_ENV !== "production") {
+    const { seedDatabase, repairApprovedTransfers, repairWrongPurchasePrices } = await import("./seed");
+    await seedDatabase();
+    await repairApprovedTransfers();
+    await repairWrongPurchasePrices();
+  } else {
+    log("Production startup maintenance skipped: existing database data preserved");
+  }
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
