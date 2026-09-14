@@ -28,6 +28,7 @@ import { StockIcon } from "@/components/stock-icon";
 import { SiteLogoBadge } from "@/components/site-logo";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { fetchStockPrices } from "@/lib/market-prices";
+import { calculateHoldingLots } from "@/lib/holding-lots";
 import type { User as UserType, StockTransaction, Watchlist } from "@shared/schema";
 
 type StockRow = {
@@ -1537,21 +1538,8 @@ function MyHoldings() {
   const [priceData, setPriceData] = useState<Record<string, { currentPrice: number; changePercent: number }>>({});
 
   const txList = transactions || [];
-  const holdingsMap: Record<string, { qty: number; totalCost: number }> = {};
-  txList.forEach((tx) => {
-    const key = tx.stockName;
-    if (!holdingsMap[key]) holdingsMap[key] = { qty: 0, totalCost: 0 };
-    if (tx.type === "in") {
-      holdingsMap[key].qty += tx.quantity;
-      holdingsMap[key].totalCost += tx.quantity * tx.pricePerShare;
-    } else {
-      const currentAvg = holdingsMap[key].qty > 0 ? holdingsMap[key].totalCost / holdingsMap[key].qty : 0;
-      holdingsMap[key].qty -= tx.quantity;
-      holdingsMap[key].totalCost = holdingsMap[key].qty * currentAvg;
-    }
-  });
-
-  const holdingStockNames = Object.entries(holdingsMap).filter(([, v]) => v.qty > 0).map(([name]) => name);
+  const holdingLots = calculateHoldingLots(txList);
+  const holdingStockNames = Array.from(new Set(holdingLots.map((lot) => lot.name)));
   const holdingStockNamesKey = JSON.stringify(holdingStockNames);
 
   useEffect(() => {
@@ -1560,16 +1548,16 @@ function MyHoldings() {
     }
   }, [holdingStockNamesKey]);
 
-  const holdingsList = Object.entries(holdingsMap)
-    .filter(([, v]) => v.qty > 0)
-    .map(([name, v]) => {
-      const avgPrice = Math.round(v.totalCost / v.qty);
+  const holdingsList = holdingLots.map((lot) => {
+      const name = lot.name;
+      const avgPrice = lot.pricePerShare;
+      const totalCost = lot.qty * avgPrice;
       const market = priceData[name] || { currentPrice: avgPrice, changePercent: 0 };
       const currentPrice = market.currentPrice;
-      const evalAmount = v.qty * currentPrice;
-      const profitLoss = evalAmount - v.totalCost;
-      const profitPct = v.totalCost > 0 ? ((profitLoss / v.totalCost) * 100) : 0;
-      return { name, qty: v.qty, avgPrice, currentPrice, evalAmount, totalCost: v.totalCost, profitLoss, profitPct, changePercent: market.changePercent };
+      const evalAmount = lot.qty * currentPrice;
+      const profitLoss = evalAmount - totalCost;
+      const profitPct = totalCost > 0 ? ((profitLoss / totalCost) * 100) : 0;
+      return { id: lot.id, name, qty: lot.qty, avgPrice, currentPrice, evalAmount, totalCost, profitLoss, profitPct, changePercent: market.changePercent };
     });
 
   const totalEval = holdingsList.reduce((s, h) => s + h.evalAmount, 0);
@@ -1633,17 +1621,17 @@ function MyHoldings() {
           <div className="space-y-2.5">
             {holdingsList.map((h) => (
               <a
-                key={h.name}
+                key={h.id}
                 href="/my-stocks"
                 className="border border-[#E0E2E4] rounded-lg p-3 hover:border-[#BFC0C1] transition-colors cursor-pointer block"
-                data-testid={`card-holding-${h.name}`}
+                data-testid={`card-holding-${h.id}`}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
                     <StockIcon name={h.name} size={36} />
                     <div>
                       <span className="text-sm font-bold text-[#14181B]">{h.name}</span>
-                      <p className="text-xs text-[#9D9FA0]">{h.qty.toLocaleString()}주 · 평균 {h.avgPrice.toLocaleString()}원</p>
+                      <p className="text-xs text-[#9D9FA0]">{h.qty.toLocaleString()}주 · 매입단가 {h.avgPrice.toLocaleString()}원</p>
                     </div>
                   </div>
                   <div className="text-right">

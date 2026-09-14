@@ -8,7 +8,7 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "test": "tsx --test --test-concurrency=1 shared/chat-security.test.ts shared/chat-integration.test.ts",
+    "test": "tsx --test --test-concurrency=1 shared/chat-security.test.ts shared/chat-integration.test.ts client/src/lib/holding-lots.test.ts",
     "db:prepare": "node scripts/ensure-stock-catalog.js",
     "db:push": "npm run db:prepare && drizzle-kit push",
     "db:migrate": "npm run db:prepare",
