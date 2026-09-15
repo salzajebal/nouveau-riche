@@ -483,10 +483,27 @@ export default function DashboardPage() {
     <>
       <div className={`h-14 border-b flex items-center ${!isMobile && sidebarCollapsed ? "justify-center px-2" : "px-4"} gap-2`}>
         {(!isMobile && sidebarCollapsed) ? (
-          <SiteLogoBadge size={28} />
+          <Link href="/">
+            <span
+              className="inline-flex cursor-pointer"
+              aria-label="메인 홈으로 이동"
+              data-testid="link-dashboard-logo-home"
+            >
+              <SiteLogoBadge size={28} />
+            </span>
+          </Link>
         ) : (
           <>
-            <SiteLogoBadge size={28} />
+            <Link href="/">
+              <span
+                onClick={() => isMobile && setMobileSidebarOpen(false)}
+                className="inline-flex cursor-pointer"
+                aria-label="메인 홈으로 이동"
+                data-testid={isMobile ? "link-mobile-dashboard-logo-home" : "link-dashboard-logo-home"}
+              >
+                <SiteLogoBadge size={28} />
+              </span>
+            </Link>
             <div className="flex flex-col min-w-0">
               <span className="text-[11px] text-muted-foreground">내 계좌</span>
             </div>
