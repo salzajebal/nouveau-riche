@@ -1164,6 +1164,7 @@ function CalendarSection() {
   const [calYear, setCalYear] = useState(today.getFullYear());
   const [calMonth, setCalMonth] = useState(today.getMonth());
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("being");
+  const [sidebarPage, setSidebarPage] = useState(1);
 
   const { data: ipoApiData, isLoading } = useQuery<IpoCalendarApiResponse>({
     queryKey: ["/api/market/ipo-calendar"],
@@ -1374,6 +1375,21 @@ function CalendarSection() {
   ];
 
   const currentSidebarItems = sidebarTab === "being" ? mergedBeingIPO : mergedToBeIPO;
+  const sidebarPageSize = 5;
+  const sidebarPageCount = Math.max(1, Math.ceil(currentSidebarItems.length / sidebarPageSize));
+  const pagedSidebarItems = currentSidebarItems.slice(
+    (sidebarPage - 1) * sidebarPageSize,
+    sidebarPage * sidebarPageSize,
+  );
+
+  useEffect(() => {
+    setSidebarPage(page => Math.min(page, sidebarPageCount));
+  }, [sidebarPageCount]);
+
+  function changeSidebarTab(tab: SidebarTab) {
+    setSidebarTab(tab);
+    setSidebarPage(1);
+  }
 
   return (
     <div className="max-w-[1200px] mx-auto px-4 py-6">
@@ -1479,14 +1495,14 @@ function CalendarSection() {
 
           <div className="flex border-b border-[#E0E2E4] mb-4">
             <button
-              onClick={() => setSidebarTab("being")}
+              onClick={() => changeSidebarTab("being")}
               className={`flex-1 py-2.5 text-[13px] font-bold border-b-2 transition-colors ${sidebarTab === "being" ? "border-[#14181B] text-[#14181B]" : "border-transparent text-[#9D9FA0]"}`}
               data-testid="sidebar-tab-being"
             >
               청약진행중 {mergedBeingIPO.length}
             </button>
             <button
-              onClick={() => setSidebarTab("tobe")}
+              onClick={() => changeSidebarTab("tobe")}
               className={`flex-1 py-2.5 text-[13px] font-bold border-b-2 transition-colors ${sidebarTab === "tobe" ? "border-[#14181B] text-[#14181B]" : "border-transparent text-[#9D9FA0]"}`}
               data-testid="sidebar-tab-tobe"
             >
@@ -1515,7 +1531,7 @@ function CalendarSection() {
             </div>
           ) : (
             <div className="space-y-2">
-              {currentSidebarItems.map((ipo, i) => {
+              {pagedSidebarItems.map((ipo, i) => {
                 const isOngoing = sidebarTab === "being";
                 const dateLabel = isOngoing
                   ? ipo.closedDate ? `${fmtMD(ipo.closedDate)} 마감` : "마감일 미정"
@@ -1523,7 +1539,7 @@ function CalendarSection() {
                 const dday = !isOngoing ? fmtDDay(ipo.offeringStartAt) : null;
                 const price = fmtPrice(ipo.minExpectedOfferPrice, ipo.maxExpectedOfferPrice, ipo.finalOfferPrice);
                 return (
-                  <div key={i} className="border border-[#E0E2E4] rounded-xl overflow-hidden" data-testid={`sidebar-ipo-${i}`}>
+                  <div key={ipo.stockCode || `${ipo.stockName}-${i}`} className="border border-[#E0E2E4] rounded-xl overflow-hidden" data-testid={`sidebar-ipo-${i}`}>
                     <div className="flex items-center gap-1.5 px-4 py-2 bg-[#F9FAFB] border-b border-[#E0E2E4]">
                       <span className={`text-[11px] font-bold ${isOngoing ? "text-[#03C75A]" : "text-[#9D9FA0]"}`}>
                         {isOngoing ? "진행중" : (dday || "예정")}
@@ -1548,6 +1564,45 @@ function CalendarSection() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {!isLoading && currentSidebarItems.length > sidebarPageSize && (
+            <div className="flex items-center justify-center gap-1 mt-4" data-testid="sidebar-pagination">
+              <button
+                type="button"
+                onClick={() => setSidebarPage(page => Math.max(1, page - 1))}
+                disabled={sidebarPage === 1}
+                aria-label="이전 페이지"
+                className="w-7 h-7 flex items-center justify-center rounded border border-[#E0E2E4] text-[#585B5E] disabled:text-[#C8CACC] disabled:bg-[#F9FAFB] disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              {Array.from({ length: sidebarPageCount }, (_, index) => index + 1).map(page => (
+                <button
+                  key={page}
+                  type="button"
+                  onClick={() => setSidebarPage(page)}
+                  aria-label={`${page}페이지`}
+                  aria-current={sidebarPage === page ? "page" : undefined}
+                  className={`w-7 h-7 rounded text-[12px] font-medium ${
+                    sidebarPage === page
+                      ? "bg-[#14181B] text-white"
+                      : "text-[#585B5E] hover:bg-[#F3F5F6]"
+                  }`}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSidebarPage(page => Math.min(sidebarPageCount, page + 1))}
+                disabled={sidebarPage === sidebarPageCount}
+                aria-label="다음 페이지"
+                className="w-7 h-7 flex items-center justify-center rounded border border-[#E0E2E4] text-[#585B5E] disabled:text-[#C8CACC] disabled:bg-[#F9FAFB] disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
 
