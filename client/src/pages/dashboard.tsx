@@ -69,7 +69,7 @@ export default function DashboardPage() {
   const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
 
   useEffect(() => {
-    const section = new URLSearchParams(location.split("?")[1] || "").get("section");
+    const section = new URLSearchParams(window.location.search).get("section");
     if (
       section === "holdings" ||
       section === "transfer" ||
