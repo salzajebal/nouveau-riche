@@ -453,8 +453,29 @@ export default function DashboardPage() {
       return { name, qty: v.qty, avgPrice, faceValue: faceValueMap[name] ?? null, currentPrice, evalAmount, totalCost: v.totalCost, profitLoss, profitPct, changePercent: market.changePercent };
     });
 
-  const totalEval = holdingsList.reduce((s, h) => s + h.evalAmount, 0);
-  const totalCost = holdingsList.reduce((s, h) => s + h.totalCost, 0);
+  const holdingRows = categoryHoldingLots.map((lot) => {
+    const market = priceData[lot.name] || { currentPrice: lot.pricePerShare, changePercent: 0 };
+    const currentPrice = market.currentPrice;
+    const totalCost = lot.qty * lot.pricePerShare;
+    const evalAmount = lot.qty * currentPrice;
+    const profitLoss = evalAmount - totalCost;
+    const profitPct = totalCost > 0 ? (profitLoss / totalCost) * 100 : 0;
+    return {
+      id: lot.id,
+      name: lot.name,
+      category: lot.category,
+      qty: lot.qty,
+      avgPrice: lot.pricePerShare,
+      currentPrice,
+      evalAmount,
+      totalCost,
+      profitLoss,
+      profitPct,
+    };
+  });
+
+  const totalEval = holdingRows.reduce((s, h) => s + h.evalAmount, 0);
+  const totalCost = holdingRows.reduce((s, h) => s + h.totalCost, 0);
   const totalProfit = totalEval - totalCost;
   const totalProfitPct = totalCost > 0 ? ((totalProfit / totalCost) * 100) : 0;
 
@@ -718,7 +739,7 @@ export default function DashboardPage() {
                 </div>
               </Card>
 
-              {holdingsList.length === 0 ? (
+              {holdingRows.length === 0 ? (
                 <Card className="p-12 text-center">
                   <Package className="w-10 h-10 mx-auto mb-3 opacity-30 text-muted-foreground" />
                   <p className="font-medium text-muted-foreground">보유 중인 종목이 없습니다</p>
@@ -732,6 +753,7 @@ export default function DashboardPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>종목명</TableHead>
+                          <TableHead className="text-center">카테고리</TableHead>
                           <TableHead className="text-right">보유수량</TableHead>
                           <TableHead className="text-right">평균단가</TableHead>
                           <TableHead className="text-right">현재가</TableHead>
@@ -741,13 +763,16 @@ export default function DashboardPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {holdingsList.map((h) => (
-                          <TableRow key={h.name} data-testid={`row-holding-${h.name}`}>
+                        {holdingRows.map((h) => (
+                          <TableRow key={h.id} data-testid={`row-holding-${h.id}`}>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 <StockIcon name={h.name} size={28} />
                                 <span className="font-semibold">{h.name}</span>
                               </div>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <Badge variant="outline" className="text-xs">{h.category || "일반"}</Badge>
                             </TableCell>
                             <TableCell className="text-right font-mono tabular-nums">{h.qty.toLocaleString()}주</TableCell>
                             <TableCell className="text-right font-mono tabular-nums">{h.avgPrice.toLocaleString()}원</TableCell>
@@ -766,12 +791,15 @@ export default function DashboardPage() {
                   </div>
                 </Card>
                 <div className="sm:hidden space-y-3">
-                  {holdingsList.map((h) => (
-                    <Card key={h.name} className="p-3" data-testid={`card-holding-mobile-${h.name}`}>
+                  {holdingRows.map((h) => (
+                    <Card key={h.id} className="p-3" data-testid={`card-holding-mobile-${h.id}`}>
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <StockIcon name={h.name} size={28} />
-                          <span className="font-semibold text-sm truncate">{h.name}</span>
+                          <div className="min-w-0">
+                            <span className="font-semibold text-sm truncate block">{h.name}</span>
+                            <Badge variant="outline" className="text-[10px] mt-0.5">{h.category || "일반"}</Badge>
+                          </div>
                         </div>
                         <div className="text-right shrink-0">
                           <span className={`text-sm font-semibold tabular-nums ${h.profitPct >= 0 ? "text-[#F73631]" : "text-[#007EFF]"}`}>
