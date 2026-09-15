@@ -1544,7 +1544,7 @@ export default function DashboardPage() {
       </Dialog>
     </div>
     <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-background border-t flex items-stretch" data-testid="mobile-bottom-nav">
-      {sidebarItems.map((item) => {
+      {sidebarItems.filter((item) => item.id !== "withdraw").map((item) => {
         const Icon = item.icon;
         const isActive = activeSection === item.id;
         return (
