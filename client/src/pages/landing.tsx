@@ -2085,15 +2085,6 @@ function Footer() {
           <SiteLogoBadge size={40} />
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4 text-xs">
-          <button onClick={() => setOpenModal("terms")} className="text-[#585B5E] hover:text-[#14181B]" data-testid="link-footer-terms">이용약관</button>
-          <button onClick={() => setOpenModal("policy")} className="text-[#585B5E] hover:text-[#14181B]" data-testid="link-footer-policy">서비스 운영정책</button>
-          <button onClick={() => setOpenModal("privacy")} className="text-[#14181B] font-bold hover:text-[#000]" data-testid="link-footer-privacy">개인정보처리방침</button>
-          <button onClick={() => setOpenModal("investment")} className="text-[#585B5E] hover:text-[#14181B]" data-testid="link-footer-investment">투자 유의 안내</button>
-          <button onClick={() => setOpenModal("about")} className="text-[#585B5E] hover:text-[#14181B]" data-testid="link-footer-about">회사소개</button>
-          <button onClick={() => setOpenModal("careers")} className="text-[#585B5E] hover:text-[#14181B]" data-testid="link-footer-careers">채용공고</button>
-        </div>
-
         <p className="text-[11px] text-[#9D9FA0] leading-relaxed mb-2">
           누보리치는 비상장주식 거래 정보를 제공하며, 투자 판단에 대한 책임은 투자자 본인에게 있습니다.
           비상장주식은 상장주식에 비해 유동성이 낮고 가격 변동성이 클 수 있으니 투자에 유의하시기 바랍니다.
