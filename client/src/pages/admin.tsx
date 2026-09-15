@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
 import { STOCK_CATEGORIES, KOREAN_BANKS } from "@shared/schema";
 import { StockIcon } from "@/components/stock-icon";
+import { calculateHoldingLots } from "@/lib/holding-lots";
 import type { User, StockTransaction, TransferRequest, IpoStock, StockCatalog, DomainGroup, LoginLog, BlockedIp, StockMemberTransfer, UnionCode, DomainFallbackUrl, WithdrawRequest } from "@shared/schema";
 import { mergeChatSnapshot } from "@shared/chat-security";
 import {
@@ -396,6 +397,118 @@ function TransactionEditDialog({ tx, onSuccess }: { tx: StockTransaction; onSucc
             </Button>
           </DialogFooter>
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MemberPurchasePriceDialog({
+  user,
+  transactions,
+  onSuccess,
+}: {
+  user: User;
+  transactions: StockTransaction[];
+  onSuccess: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [prices, setPrices] = useState<Record<string, string>>({});
+  const { toast } = useToast();
+  const holdingLots = calculateHoldingLots(transactions.filter((tx) => tx.userId === user.id));
+
+  const mutation = useMutation({
+    mutationFn: async ({ transactionId, pricePerShare }: { transactionId: string; pricePerShare: number }) => {
+      await apiRequest("PUT", `/api/admin/transactions/${transactionId}`, { pricePerShare });
+    },
+    onSuccess: () => {
+      toast({ title: "수정 완료", description: "회원의 매입단가가 변경되었습니다" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/transactions"] });
+      onSuccess();
+    },
+    onError: (error: Error) => {
+      toast({ title: "오류", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (nextOpen) {
+      setPrices(Object.fromEntries(holdingLots.map((lot) => [lot.id, String(lot.pricePerShare)])));
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          data-testid={`button-purchase-price-${user.id}`}
+          title="매입단가 설정"
+        >
+          <Banknote className="w-4 h-4 text-emerald-600" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>회원별 매입단가 설정</DialogTitle>
+          <DialogDescription>
+            {user.fullName} 회원의 보유 주식 매입단가를 입고 건별로 설정합니다.
+          </DialogDescription>
+        </DialogHeader>
+        {holdingLots.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            현재 보유 중인 주식이 없습니다.
+          </div>
+        ) : (
+          <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+            {holdingLots.map((lot) => {
+              const nextPrice = Number(prices[lot.id]);
+              const isValid = Number.isInteger(nextPrice) && nextPrice > 0;
+              const unchanged = nextPrice === lot.pricePerShare;
+              return (
+                <Card key={lot.id} className="p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <StockIcon name={lot.name} size={24} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-medium">{lot.name}</span>
+                          <Badge variant="outline" className="shrink-0 text-[10px]">{lot.category}</Badge>
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          보유 {lot.qty.toLocaleString()}주 · 입고 {new Date(lot.createdAt).toLocaleDateString("ko-KR")}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <Input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={prices[lot.id] ?? ""}
+                        onChange={(event) => setPrices((current) => ({ ...current, [lot.id]: event.target.value }))}
+                        className="h-8 w-28 text-right text-xs"
+                        aria-label={`${lot.name} 매입단가`}
+                        data-testid={`input-purchase-price-${lot.id}`}
+                      />
+                      <span className="text-xs text-muted-foreground">원</span>
+                      <Button
+                        size="sm"
+                        className="h-8"
+                        onClick={() => mutation.mutate({ transactionId: lot.id, pricePerShare: nextPrice })}
+                        disabled={mutation.isPending || !isValid || unchanged}
+                        data-testid={`button-save-purchase-price-${lot.id}`}
+                      >
+                        저장
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -3395,6 +3508,7 @@ export default function AdminPage() {
                         ) : null;
                       })()}
                       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-gray-200">
+                        <MemberPurchasePriceDialog user={u} transactions={transactions} onSuccess={refreshData} />
                         <MemberDetailDialog user={u} transactions={transactions} onTransactionChange={refreshData} />
                         <MemberEditDialog user={u} onSuccess={refreshData} />
                         <MemberFreezeDialog user={u} onSuccess={refreshData} />
@@ -3538,6 +3652,7 @@ export default function AdminPage() {
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center justify-center gap-1">
+                                <MemberPurchasePriceDialog user={u} transactions={transactions} onSuccess={refreshData} />
                                 <MemberDetailDialog user={u} transactions={transactions} onTransactionChange={refreshData} />
                                 <MemberEditDialog user={u} onSuccess={refreshData} />
                                 <MemberFreezeDialog user={u} onSuccess={refreshData} />
