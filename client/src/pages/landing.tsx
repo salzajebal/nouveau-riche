@@ -1075,7 +1075,7 @@ function ThemeStocks() {
               {(showAllStocks ? currentTheme.includedStocks || [] : (currentTheme.includedStocks || []).slice(0, 5)).map((stock: any) => (
                 <span
                   key={stock.code || stock.name}
-                  className="px-3 py-1 bg-white/20 rounded-full text-sm text-white hover:bg-white/30 cursor-pointer transition-colors"
+                  className="px-3 py-1 bg-white/20 rounded-full text-sm text-white"
                   data-testid={`tag-company-${stock.name}`}
                 >
                   {stock.name}
@@ -1480,7 +1480,7 @@ function IPOUpcomingSidebar() {
               : "공모가 미정";
             const compRate = ipo.competitionRate || "-";
             return (
-              <div key={i} className="px-4 pt-3 pb-2 hover:bg-[#F9FAFB] transition-colors cursor-pointer" data-testid={`sidebar-ipo-card-${i}`}>
+              <div key={i} className="px-4 pt-3 pb-2" data-testid={`sidebar-ipo-card-${i}`}>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-[13px] font-bold text-[#14181B]">{ddayStr}</span>
                   {dateLabel && <span className="text-[12px] text-[#9D9FA0]">{dateLabel} 예정</span>}
@@ -1504,7 +1504,6 @@ function IPOUpcomingSidebar() {
                       <p className="text-[11px] text-[#9D9FA0]">기관경쟁률 {compRate}</p>
                     </div>
                   </div>
-                  <ChevronRight className="w-4 h-4 text-[#BFC0C1] shrink-0" />
                 </div>
               </div>
             );
