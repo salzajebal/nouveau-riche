@@ -35,9 +35,14 @@ export const stockTransactions = pgTable("stock_transactions", {
   quantity: integer("quantity").notNull(),
   pricePerShare: integer("price_per_share").notNull(),
   memo: text("memo"),
+  transferRequestId: varchar("transfer_request_id"),
   hidden: boolean("hidden").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  transferRequestIdUnique: uniqueIndex("stock_transactions_transfer_request_id_unique")
+    .on(table.transferRequestId)
+    .where(sql`${table.transferRequestId} IS NOT NULL`),
+}));
 
 // 종목 코드/가격 카탈로그. 종목명으로 기존 거래 내역과 호환하며
 // stockCode가 없는 비상장 종목은 빈 문자열을 저장합니다.
@@ -103,6 +108,7 @@ export const transferRequests = pgTable("transfer_requests", {
   accountNumber: text("account_number").notNull(),
   brokerName: text("broker_name").notNull().default(""),
   stockName: text("stock_name").notNull().default("비상장주식"),
+  category: text("category"),
   quantity: integer("quantity").notNull(),
   purchasePrice: integer("purchase_price").notNull().default(0),
   currentPrice: integer("current_price").notNull().default(0),
@@ -176,6 +182,9 @@ export const insertTransferRequestSchema = createInsertSchema(transferRequests).
   status: true,
   adminMemo: true,
   createdAt: true,
+}).extend({
+  category: z.string().trim().min(1, "카테고리를 선택해주세요").max(50).nullable().optional(),
+  quantity: z.coerce.number().int().positive("수량을 올바르게 입력해주세요"),
 });
 
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({

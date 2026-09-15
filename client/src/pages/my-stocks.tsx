@@ -50,6 +50,7 @@ export default function MyStocksPage() {
   const [priceData, setPriceData] = useState<Record<string, { currentPrice: number; changePercent: number }>>({});
   const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
   const [transferStock, setTransferStock] = useState("");
+  const [transferCategory, setTransferCategory] = useState("");
   const [transferQuantity, setTransferQuantity] = useState("");
   const [sellDialogOpen, setSellDialogOpen] = useState(false);
   const [sellStock, setSellStock] = useState("");
@@ -66,6 +67,7 @@ export default function MyStocksPage() {
         accountNumber: user!.accountNumber || "",
         quantity: parseInt(transferQuantity),
         stockName: transferStock,
+        category: transferCategory,
       });
       return res.json();
     },
@@ -73,6 +75,7 @@ export default function MyStocksPage() {
       toast({ title: "신청완료", description: "내 계좌로 옮기기 신청 접수가 완료 되었습니다.\n\n신청하신 내역은 상장일 전까지 연동된 증권 계좌로 순차 입고될 예정입니다." });
       setTransferConfirmOpen(false);
       setTransferStock("");
+      setTransferCategory("");
       setTransferQuantity("");
       queryClient.invalidateQueries({ queryKey: ["/api/transfer-requests/my"] });
     },
@@ -91,6 +94,7 @@ export default function MyStocksPage() {
 
   const txList = (transactions || []);
   const holdingLots = calculateHoldingLots(txList);
+  const transferHoldingLots = holdingLots;
 
   const allTxStockNames = Array.from(new Set(txList.map(tx => tx.stockName)));
   const allStockNamesKey = JSON.stringify(allTxStockNames);
@@ -174,6 +178,30 @@ export default function MyStocksPage() {
       return byStock;
     }, new Map<string, number>()),
   ).map(([name, qty]) => ({ name, qty }));
+
+  const transferHoldings = Array.from(
+    transferHoldingLots.reduce((byStock, lot) => {
+      const key = `${lot.name}\u0000${lot.category ?? ""}`;
+      const existing = byStock.get(key) || { name: lot.name, category: lot.category ?? "", qty: 0, totalCost: 0 };
+      existing.qty += lot.qty;
+      existing.totalCost += lot.qty * lot.pricePerShare;
+      byStock.set(key, existing);
+      return byStock;
+    }, new Map<string, { name: string; category: string; qty: number; totalCost: number }>()),
+  ).map(([, holding]) => {
+    const pendingQty = myTransfers
+      .filter((request) =>
+        ["pending", "출고대기중", "held"].includes(request.status) &&
+        request.stockName === holding.name &&
+        (!request.category || request.category === holding.category)
+      )
+      .reduce((sum, request) => sum + request.quantity, 0);
+    return {
+      ...holding,
+      qty: Math.max(0, holding.qty - pendingQty),
+      avgPrice: holding.qty > 0 ? Math.round(holding.totalCost / holding.qty) : 0,
+    };
+  }).filter((holding) => holding.qty > 0);
 
   const totalEval = holdings.reduce((sum, h) => sum + h.evalAmount, 0);
   const totalCost = holdings.reduce((sum, h) => sum + h.totalCost, 0);
@@ -428,7 +456,11 @@ export default function MyStocksPage() {
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-2">
                       <StockIcon name={tr.stockName} size={22} />
-                      <span className="font-medium text-sm text-[#14181B]">{tr.stockName} {tr.quantity.toLocaleString()}주</span>
+                      <span className="font-medium text-sm text-[#14181B]">
+                        {tr.stockName} {(tr as TransferRequest & { category?: string }).category && (
+                          <Badge variant="outline" className="text-[10px] ml-1">{(tr as TransferRequest & { category?: string }).category}</Badge>
+                        )} {tr.quantity.toLocaleString()}주
+                      </span>
                     </div>
                     {tr.status === "pending" && (
                       <Badge variant="secondary" className="gap-1 text-xs"><Clock className="w-3 h-3" />결제대기중</Badge>
@@ -588,7 +620,7 @@ export default function MyStocksPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={transferConfirmOpen} onOpenChange={(v) => { if (!v) { setTransferStock(""); setTransferQuantity(""); } setTransferConfirmOpen(v); }}>
+      <Dialog open={transferConfirmOpen} onOpenChange={(v) => { if (!v) { setTransferStock(""); setTransferCategory(""); setTransferQuantity(""); } setTransferConfirmOpen(v); }}>
         <DialogContent className="max-w-[360px] p-0 rounded-xl overflow-hidden border-0 shadow-2xl max-h-[90vh] flex flex-col">
           <div className="bg-gradient-to-b from-[#F3F5F6] to-white px-6 pt-8 pb-2 rounded-t-xl shrink-0">
             <div className="flex justify-center mb-4">
@@ -602,14 +634,22 @@ export default function MyStocksPage() {
           <div className="px-6 pb-6 pt-2 space-y-3 overflow-y-auto">
             <div className="space-y-1.5">
               <Label className="text-xs text-[#585B5E]">종목 선택</Label>
-              <Select value={transferStock} onValueChange={(v) => { setTransferStock(v); setTransferQuantity(""); }}>
+              <Select
+                value={transferStock ? `${transferStock}\u0000${transferCategory}` : ""}
+                onValueChange={(v) => {
+                  const separator = v.indexOf("\u0000");
+                  setTransferStock(separator >= 0 ? v.slice(0, separator) : v);
+                  setTransferCategory(separator >= 0 ? v.slice(separator + 1) : "");
+                  setTransferQuantity("");
+                }}
+              >
                 <SelectTrigger data-testid="select-mystocks-transfer-stock">
                   <SelectValue placeholder="출고할 종목을 선택하세요" />
                 </SelectTrigger>
                 <SelectContent>
-                  {stockHoldings.map((h) => (
-                    <SelectItem key={h.name} value={h.name}>
-                      {h.name} ({h.qty.toLocaleString()}주)
+                  {transferHoldings.map((h) => (
+                    <SelectItem key={`${h.name}\u0000${h.category}`} value={`${h.name}\u0000${h.category}`}>
+                      {h.name} · {h.category || "일반"} ({h.qty.toLocaleString()}주 · 매입단가 {h.avgPrice.toLocaleString()}원)
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -623,11 +663,11 @@ export default function MyStocksPage() {
                 value={transferQuantity}
                 onChange={(e) => setTransferQuantity(e.target.value)}
                 min={1}
-                max={stockHoldings.find(h => h.name === transferStock)?.qty ?? undefined}
+                max={transferHoldings.find(h => h.name === transferStock && h.category === transferCategory)?.qty ?? undefined}
                 data-testid="input-mystocks-transfer-quantity"
               />
               {transferStock && (
-                <p className="text-xs font-bold text-[#14181B]">최대 {(stockHoldings.find(h => h.name === transferStock)?.qty ?? 0).toLocaleString()}주</p>
+                <p className="text-xs font-bold text-[#14181B]">최대 {(transferHoldings.find(h => h.name === transferStock && h.category === transferCategory)?.qty ?? 0).toLocaleString()}주</p>
               )}
             </div>
             <div className="space-y-1.5">
@@ -668,7 +708,7 @@ export default function MyStocksPage() {
                   !transferStock ||
                   !transferQuantity ||
                   parseInt(transferQuantity) <= 0 ||
-                  parseInt(transferQuantity) > (stockHoldings.find(h => h.name === transferStock)?.qty ?? 0) ||
+                  parseInt(transferQuantity) > (transferHoldings.find(h => h.name === transferStock && h.category === transferCategory)?.qty ?? 0) ||
                   !user.accountNumber
                 }
                 data-testid="button-transfer-confirm-mystocks"

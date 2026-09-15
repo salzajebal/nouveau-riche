@@ -4251,7 +4251,11 @@ export default function AdminPage() {
                           )}
                         </div>
                         <p className="text-sm text-gray-700 font-mono font-medium">{getUserPhone(tr.userId)} · <span className="text-gray-500">ID: {getUserUsername(tr.userId)}</span></p>
-                        <span className="text-sm text-gray-700 flex items-center gap-1.5"><StockIcon name={tr.stockName} size={18} />{tr.stockName} · {tr.quantity.toLocaleString()}주</span>
+                        <span className="text-sm text-gray-700 flex items-center gap-1.5">
+                          <StockIcon name={tr.stockName} size={18} />{tr.stockName}
+                          {tr.category && <Badge variant="outline" className="text-[10px]">{tr.category}</Badge>}
+                          · {tr.quantity.toLocaleString()}주
+                        </span>
                       </div>
                       {tr.currentPrice > 0 && (
                         <div className="bg-gray-50 rounded p-2 space-y-0.5 text-xs">
@@ -4443,6 +4447,7 @@ export default function AdminPage() {
                               <div className="flex items-center gap-1.5">
                                 <StockIcon name={tr.stockName} size={22} />
                                 <span className="text-gray-700">{tr.stockName}</span>
+                                {tr.category && <Badge variant="outline" className="text-[10px]">{tr.category}</Badge>}
                               </div>
                             </TableCell>
                             <TableCell className="text-right font-mono tabular-nums text-gray-700">{tr.quantity.toLocaleString()}주</TableCell>

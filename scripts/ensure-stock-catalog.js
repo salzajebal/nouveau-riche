@@ -34,6 +34,19 @@ try {
     ON "stock_catalog" (lower("stock_code"))
     WHERE "stock_code" <> ''
   `);
+  await pool.query(`
+    ALTER TABLE "transfer_requests"
+    ADD COLUMN IF NOT EXISTS "category" text
+  `);
+  await pool.query(`
+    ALTER TABLE "stock_transactions"
+    ADD COLUMN IF NOT EXISTS "transfer_request_id" varchar
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "stock_transactions_transfer_request_id_unique"
+    ON "stock_transactions" ("transfer_request_id")
+    WHERE "transfer_request_id" IS NOT NULL
+  `);
   console.log("stock_catalog table ready");
 } finally {
   await pool.end();

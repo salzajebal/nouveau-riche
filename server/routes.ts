@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { db } from "./db";
 import session from "express-session";
 import connectPg from "connect-pg-simple";
-import { registerSchema, loginSchema, insertStockTransactionSchema, updateUserSchema, insertTransferRequestSchema, insertStockMemberTransferSchema, insertChatMacroSchema, insertPopularIpoStockSchema, insertStockCatalogSchema, chatMessages, chatRooms } from "@shared/schema";
+import { registerSchema, loginSchema, insertStockTransactionSchema, updateUserSchema, insertTransferRequestSchema, insertStockMemberTransferSchema, insertChatMacroSchema, insertPopularIpoStockSchema, insertStockCatalogSchema, chatMessages, chatRooms, stockTransactions, transferRequests, users, stockMemberTransfers } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcrypt";
 import { WebSocketServer, WebSocket } from "ws";
@@ -15,9 +15,10 @@ import path from "path";
 import fs from "fs";
 import sharp from "sharp";
 import { createHmac, timingSafeEqual } from "crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { DATABASE_URL } from "./db";
 import { canAccessChatRoom, canRecallAdminMessage, canSendChatMessage } from "@shared/chat-security";
+import { calculateHoldingLots } from "@shared/holding-lots";
 
 const uploadDir = path.join(process.cwd(), "uploads", "chat");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -1816,12 +1817,16 @@ export async function registerRoutes(
   app.post("/api/admin/transactions", requireAdmin, async (req, res) => {
     try {
       const { createdAt: customDate, ...rest } = req.body;
-      const data = insertStockTransactionSchema.parse(rest);
-      let transaction = await storage.createTransaction(data);
-      if (customDate) {
-        const updated = await storage.updateTransaction(transaction.id, { createdAt: new Date(customDate) });
-        if (updated) transaction = updated;
-      }
+      const parsed = insertStockTransactionSchema.parse(rest);
+      const data = { ...parsed, transferRequestId: null };
+      const transaction = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${data.userId}))`);
+        const [created] = await tx.insert(stockTransactions).values({
+          ...data,
+          createdAt: customDate ? new Date(customDate) : new Date(),
+        }).returning();
+        return created;
+      });
       broadcastTransactionUpdate(data.userId);
       return res.json(transaction);
     } catch (error) {
@@ -2120,6 +2125,13 @@ export async function registerRoutes(
 
   app.put("/api/admin/transactions/:id", requireAdmin, async (req, res) => {
     try {
+      const existing = await storage.getTransaction(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ message: "거래를 찾을 수 없습니다" });
+      }
+      if (existing.transferRequestId) {
+        return res.status(400).json({ message: "출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요" });
+      }
       const { quantity, pricePerShare, memo, category, createdAt } = req.body;
       const updateData: any = {};
       if (quantity !== undefined) updateData.quantity = parseInt(quantity);
@@ -2127,13 +2139,29 @@ export async function registerRoutes(
       if (memo !== undefined) updateData.memo = memo;
       if (category !== undefined) updateData.category = category;
       if (createdAt !== undefined) updateData.createdAt = new Date(createdAt);
-      const tx = await storage.updateTransaction(req.params.id, updateData);
-      if (!tx) {
-        return res.status(404).json({ message: "거래를 찾을 수 없습니다" });
-      }
-      broadcastTransactionUpdate(tx.userId);
-      return res.json(tx);
+      const transaction = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${existing.userId}))`);
+        const [locked] = await tx.select().from(stockTransactions)
+          .where(eq(stockTransactions.id, req.params.id))
+          .for("update");
+        if (!locked) {
+          throw Object.assign(new Error("거래를 찾을 수 없습니다"), { status: 404 });
+        }
+        if (locked.transferRequestId) {
+          throw Object.assign(new Error("출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요"), { status: 400 });
+        }
+        const [updated] = await tx.update(stockTransactions)
+          .set(updateData)
+          .where(eq(stockTransactions.id, locked.id))
+          .returning();
+        return updated;
+      });
+      broadcastTransactionUpdate(transaction.userId);
+      return res.json(transaction);
     } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
       return res.status(500).json({ message: "거래 수정에 실패했습니다" });
     }
   });
@@ -2141,21 +2169,75 @@ export async function registerRoutes(
   app.delete("/api/admin/transactions/:id", requireAdmin, async (req, res) => {
     try {
       const tx = await storage.getTransaction(req.params.id);
-      await storage.deleteTransaction(req.params.id);
-      if (tx) broadcastTransactionUpdate(tx.userId);
+      if (tx?.transferRequestId) {
+        return res.status(400).json({ message: "출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요" });
+      }
+      if (tx) {
+        await db.transaction(async (transaction) => {
+          await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${tx.userId}))`);
+          const [locked] = await transaction.select().from(stockTransactions)
+            .where(eq(stockTransactions.id, req.params.id))
+            .for("update");
+          if (!locked) return;
+          if (locked.transferRequestId) {
+            throw Object.assign(new Error("출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요"), { status: 400 });
+          }
+          await transaction.delete(stockTransactions).where(eq(stockTransactions.id, locked.id));
+        });
+        broadcastTransactionUpdate(tx.userId);
+      }
       return res.json({ message: "삭제 완료" });
     } catch (error) {
+      if (error instanceof Error && "status" in error && error.status === 400) {
+        return res.status(400).json({ message: error.message });
+      }
       return res.status(500).json({ message: "삭제 실패" });
     }
   });
 
   app.patch("/api/admin/transactions/:id/hidden", requireAdmin, async (req, res) => {
     try {
-      const tx = await storage.toggleTransactionHidden(req.params.id);
-      if (!tx) return res.status(404).json({ message: "내역을 찾을 수 없습니다" });
-      broadcastTransactionUpdate(tx.userId);
-      return res.json(tx);
+      const existing = await storage.getTransaction(req.params.id);
+      if (!existing) return res.status(404).json({ message: "내역을 찾을 수 없습니다" });
+      const transaction = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${existing.userId}))`);
+        const [locked] = await tx.select().from(stockTransactions)
+          .where(eq(stockTransactions.id, existing.id))
+          .for("update");
+        if (!locked) {
+          throw Object.assign(new Error("내역을 찾을 수 없습니다"), { status: 404 });
+        }
+
+        let linkedTransferRequest = Boolean(locked.transferRequestId);
+        if (!linkedTransferRequest) {
+          const legacyMatch = locked.memo?.match(/^(?:카테고리)?출고신청#(.+)$/);
+          if (legacyMatch) {
+            const [request] = await tx.select({ id: transferRequests.id })
+              .from(transferRequests)
+              .where(and(
+                eq(transferRequests.id, legacyMatch[1]),
+                eq(transferRequests.userId, locked.userId),
+              ))
+              .limit(1);
+            linkedTransferRequest = Boolean(request);
+          }
+        }
+        if (linkedTransferRequest && !locked.hidden) {
+          throw Object.assign(new Error("출고 신청으로 생성된 거래는 숨길 수 없습니다"), { status: 400 });
+        }
+
+        const [updated] = await tx.update(stockTransactions)
+          .set({ hidden: linkedTransferRequest ? false : !locked.hidden })
+          .where(eq(stockTransactions.id, locked.id))
+          .returning();
+        return updated;
+      });
+      broadcastTransactionUpdate(transaction.userId);
+      return res.json(transaction);
     } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
       return res.status(500).json({ message: "처리 실패" });
     }
   });
@@ -2164,103 +2246,111 @@ export async function registerRoutes(
     if (!req.session.userId) {
       return res.status(401).json({ message: "로그인이 필요합니다" });
     }
+    const sessionUserId = req.session.userId;
     try {
       const data = insertTransferRequestSchema.parse(req.body);
-      const user = await storage.getUser(req.session.userId);
+      const user = await storage.getUser(sessionUserId);
       if (!user) {
         return res.status(404).json({ message: "사용자를 찾을 수 없습니다" });
       }
-      const transactions = await storage.getTransactionsByUserId(req.session.userId);
-      const holdingsMap: Record<string, { qty: number; totalCost: number }> = {};
-      const isInType = (t: string) => t === "in" || t === "입고";
-      const isOutType = (t: string) => t === "out" || t === "출고" || t === "내 계좌로 옮기기";
-      for (const tx of transactions) {
-        const key = tx.stockName;
-        if (!holdingsMap[key]) holdingsMap[key] = { qty: 0, totalCost: 0 };
-        if (isInType(tx.type)) {
-          holdingsMap[key].qty += tx.quantity;
-          holdingsMap[key].totalCost += tx.quantity * tx.pricePerShare;
-        } else if (isOutType(tx.type)) {
-          const h = holdingsMap[key];
-          if (h.qty > 0) {
-            const currentAvg = h.totalCost / h.qty;
-            h.qty -= tx.quantity;
-            if (h.qty <= 0) {
-              h.qty = 0;
-              h.totalCost = 0;
-            } else {
-              h.totalCost = h.qty * currentAvg;
-            }
+      const requestedStock = (data.stockName || "").trim();
+      if (!requestedStock) {
+        return res.status(400).json({ message: "출고할 종목을 선택해주세요" });
+      }
+      const marketPrice = await getServerStockPrice(requestedStock);
+      const transferRequest = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sessionUserId}))`);
+
+        const transactions = await tx.select().from(stockTransactions)
+          .where(eq(stockTransactions.userId, sessionUserId));
+        const holdingLots = calculateHoldingLots(transactions);
+        const holdingKey = (stockName: string, category: string) => `${stockName}\u0000${category}`;
+        const holdingsMap = new Map<string, { stockName: string; category: string; qty: number }>();
+        for (const lot of holdingLots) {
+          const key = holdingKey(lot.name, lot.category);
+          const holding = holdingsMap.get(key) || { stockName: lot.name, category: lot.category, qty: 0 };
+          holding.qty += lot.qty;
+          holdingsMap.set(key, holding);
+        }
+
+        let requestedCategory = (data.category || "").trim();
+        const matchingHoldings = Array.from(holdingsMap.values()).filter((holding) => holding.stockName === requestedStock);
+        if (!requestedCategory) {
+          if (matchingHoldings.length === 1) {
+            requestedCategory = matchingHoldings[0].category;
+          } else {
+            throw Object.assign(new Error(`${requestedStock}의 출고 카테고리를 선택해주세요`), { status: 400 });
           }
         }
-      }
-      const requestedStock = data.stockName || "";
-      let resolvedStockName = requestedStock;
-      let avgPurchasePrice = 0;
 
-      // 이미 신청 중인 수량을 보유수량에서 차감
-      const pendingRequests = await storage.getPendingTransferRequestsByUserId(req.session.userId);
-      const pendingQtyByStock: Record<string, number> = {};
-      for (const pr of pendingRequests) {
-        const key = pr.stockName || "";
-        pendingQtyByStock[key] = (pendingQtyByStock[key] || 0) + (pr.quantity || 0);
-      }
-      // 잔여 보유수량 계산 (신청 중 수량 차감)
-      const availableMap: Record<string, { qty: number; totalCost: number }> = {};
-      for (const [name, holding] of Object.entries(holdingsMap)) {
-        const pending = pendingQtyByStock[name] || 0;
-        const available = holding.qty - pending;
-        if (available > 0) availableMap[name] = { qty: available, totalCost: holding.totalCost };
-      }
+        const selectedHolding = holdingsMap.get(holdingKey(requestedStock, requestedCategory));
+        if (!selectedHolding?.qty) {
+          throw Object.assign(new Error(`${requestedStock} ${requestedCategory} 보유 수량이 없습니다`), { status: 400 });
+        }
 
-      if (requestedStock && holdingsMap[requestedStock] && holdingsMap[requestedStock].qty > 0) {
-        const available = availableMap[requestedStock]?.qty ?? 0;
+        const pendingRequests = await tx.select().from(transferRequests).where(and(
+          eq(transferRequests.userId, sessionUserId),
+          inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+        ));
+        let categorizedPendingQty = 0;
+        let legacyPendingQty = 0;
+        for (const pendingRequest of pendingRequests) {
+          if (pendingRequest.stockName !== requestedStock) continue;
+          if (pendingRequest.category === requestedCategory) categorizedPendingQty += pendingRequest.quantity || 0;
+          if (!pendingRequest.category) legacyPendingQty += pendingRequest.quantity || 0;
+        }
+        const alreadyPending = categorizedPendingQty + legacyPendingQty;
+        const available = Math.max(0, selectedHolding.qty - alreadyPending);
         if (data.quantity > available) {
-          const totalHeld = holdingsMap[requestedStock].qty;
-          const alreadyPending = pendingQtyByStock[requestedStock] || 0;
-          if (alreadyPending > 0) {
-            return res.status(400).json({ message: `${requestedStock} 잔여 신청 가능 수량(${available}주)을 초과할 수 없습니다. (보유 ${totalHeld}주 - 신청중 ${alreadyPending}주)` });
-          }
-          return res.status(400).json({ message: `${requestedStock} 보유 수량(${totalHeld}주)을 초과할 수 없습니다` });
+          throw Object.assign(new Error(
+            `${requestedStock} ${requestedCategory} 잔여 신청 가능 수량(${available}주)을 초과할 수 없습니다. (보유 ${selectedHolding.qty}주 - 신청중 ${alreadyPending}주)`,
+          ), { status: 400 });
         }
-        avgPurchasePrice = Math.round(holdingsMap[requestedStock].totalCost / holdingsMap[requestedStock].qty);
-      } else {
-        const available = Object.entries(availableMap).filter(([, v]) => v.qty > 0);
-        if (available.length === 0) {
-          return res.status(400).json({ message: "보유 중인 종목이 없습니다" });
-        }
-        const totalAvailable = available.reduce((sum, [, v]) => sum + v.qty, 0);
-        if (data.quantity > totalAvailable) {
-          return res.status(400).json({ message: `보유 수량(${totalAvailable}주)을 초과할 수 없습니다` });
-        }
-        const [firstStockName, firstHolding] = available[0];
-        resolvedStockName = firstStockName;
-        avgPurchasePrice = Math.round(firstHolding.totalCost / firstHolding.qty);
-      }
 
-      const marketPrice = await getServerStockPrice(resolvedStockName);
-      const currentPrice = marketPrice || avgPurchasePrice;
-      const totalAmount = currentPrice * data.quantity;
-      const profitRate = avgPurchasePrice > 0 
-        ? (((currentPrice - avgPurchasePrice) / avgPurchasePrice) * 100).toFixed(2) 
-        : "0";
+        const selectedLots = holdingLots.filter(
+          (lot) => lot.name === requestedStock && lot.category === requestedCategory,
+        );
+        let pendingToSkip = alreadyPending;
+        let quantityToPrice = data.quantity;
+        let purchaseCost = 0;
+        for (const lot of selectedLots) {
+          const skipped = Math.min(lot.qty, pendingToSkip);
+          pendingToSkip -= skipped;
+          const lotAvailable = lot.qty - skipped;
+          const pricedQuantity = Math.min(lotAvailable, quantityToPrice);
+          purchaseCost += pricedQuantity * lot.pricePerShare;
+          quantityToPrice -= pricedQuantity;
+          if (quantityToPrice <= 0) break;
+        }
+        const avgPurchasePrice = Math.round(purchaseCost / data.quantity);
+        const currentPrice = marketPrice || avgPurchasePrice;
+        const totalAmount = currentPrice * data.quantity;
+        const profitRate = avgPurchasePrice > 0
+          ? (((currentPrice - avgPurchasePrice) / avgPurchasePrice) * 100).toFixed(2)
+          : "0";
 
-      const transferRequest = await storage.createTransferRequest({ 
-        ...data, 
-        userId: req.session.userId,
-        brokerName: user.bank || "",
-        stockName: resolvedStockName,
-        purchasePrice: avgPurchasePrice,
-        currentPrice,
-        totalAmount,
-        profitRate,
+        const [created] = await tx.insert(transferRequests).values({
+          ...data,
+          userId: sessionUserId,
+          brokerName: user.bank || "",
+          stockName: requestedStock,
+          category: requestedCategory,
+          purchasePrice: avgPurchasePrice,
+          currentPrice,
+          totalAmount,
+          profitRate,
+        }).returning();
+        return created;
       });
-      broadcastTransactionUpdate(req.session.userId);
-      broadcastTransferUpdate(req.session.userId, { action: "new_request", request: transferRequest, userName: user.fullName });
+      broadcastTransactionUpdate(sessionUserId);
+      broadcastTransferUpdate(sessionUserId, { action: "new_request", request: transferRequest, userName: user.fullName });
       return res.json(transferRequest);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
+      }
+      if (error instanceof Error && "status" in error && error.status === 400) {
+        return res.status(400).json({ message: error.message });
       }
       return res.status(500).json({ message: "출고 신청에 실패했습니다" });
     }
@@ -2270,19 +2360,31 @@ export async function registerRoutes(
     if (!req.session.userId) {
       return res.status(401).json({ message: "로그인이 필요합니다" });
     }
+    const sessionUserId = req.session.userId;
     try {
       const { id } = req.params;
-      const requests = await storage.getTransferRequestsByUserId(req.session.userId);
-      const target = requests.find((r) => r.id === id);
-      if (!target) {
-        return res.status(404).json({ message: "신청 내역을 찾을 수 없습니다" });
-      }
-      if (target.status !== "pending") {
-        return res.status(400).json({ message: "대기 중인 신청만 삭제할 수 있습니다" });
-      }
-      await storage.deleteTransferRequest(id, req.session.userId);
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sessionUserId}))`);
+        const [target] = await tx.select().from(transferRequests).where(and(
+          eq(transferRequests.id, id),
+          eq(transferRequests.userId, sessionUserId),
+        )).for("update");
+        if (!target) {
+          throw Object.assign(new Error("신청 내역을 찾을 수 없습니다"), { status: 404 });
+        }
+        if (target.status !== "pending") {
+          throw Object.assign(new Error("대기 중인 신청만 삭제할 수 있습니다"), { status: 400 });
+        }
+        await tx.delete(transferRequests).where(and(
+          eq(transferRequests.id, id),
+          eq(transferRequests.userId, sessionUserId),
+        ));
+      });
       return res.json({ success: true });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
       return res.status(500).json({ message: "삭제에 실패했습니다" });
     }
   });
@@ -2428,6 +2530,7 @@ export async function registerRoutes(
     if (!req.session.userId) {
       return res.status(401).json({ message: "로그인이 필요합니다" });
     }
+    const sessionUserId = req.session.userId;
     try {
       const { stockName, quantity, pricePerShare } = req.body;
       if (!stockName || typeof stockName !== "string" || !stockName.trim()) {
@@ -2444,51 +2547,56 @@ export async function registerRoutes(
       }
 
       // 확정매도 허용 여부 서버 검증
-      const sellingUser = await storage.getUser(req.session.userId);
-      if (!sellingUser) return res.status(401).json({ message: "사용자 정보를 찾을 수 없습니다" });
-      if (sellingUser.canSell === false) {
-        return res.status(403).json({ message: "확정매도 권한이 없습니다. 관리자에게 문의하세요." });
-      }
-
-      const transactions = await storage.getTransactionsByUserId(req.session.userId);
-      const isInType = (t: string) => t === "in" || t === "입고";
-      const isOutType = (t: string) => t === "out" || t === "출고" || t === "주식이전" || t === "내 계좌로 옮기기" || t === "확정매도";
-
-      const holdingsMap: Record<string, { qty: number; category: string }> = {};
-      for (const tx of transactions) {
-        const key = tx.stockName;
-        if (!holdingsMap[key]) holdingsMap[key] = { qty: 0, category: tx.category };
-        if (isInType(tx.type)) {
-          holdingsMap[key].qty += tx.quantity;
-        } else if (isOutType(tx.type)) {
-          holdingsMap[key].qty -= tx.quantity;
+      const sellAmount = qty * Math.round(price);
+      const soldTransaction = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${sessionUserId}))`);
+        const [sellingUser] = await tx.select().from(users).where(eq(users.id, sessionUserId)).for("update");
+        if (!sellingUser) {
+          throw Object.assign(new Error("사용자 정보를 찾을 수 없습니다"), { status: 401 });
         }
-      }
+        if (sellingUser.canSell === false) {
+          throw Object.assign(new Error("확정매도 권한이 없습니다. 관리자에게 문의하세요."), { status: 403 });
+        }
 
-      const holding = holdingsMap[stockName.trim()];
-      if (!holding || holding.qty <= 0) {
-        return res.status(400).json({ message: "보유 중인 종목이 없습니다" });
-      }
-      if (qty > holding.qty) {
-        return res.status(400).json({ message: `보유 수량(${holding.qty}주)을 초과할 수 없습니다` });
-      }
+        const transactions = await tx.select().from(stockTransactions)
+          .where(eq(stockTransactions.userId, sessionUserId));
+        const lots = calculateHoldingLots(transactions);
+        const stockLots = lots.filter((lot) => lot.name === stockName.trim());
+        const totalHolding = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
+        const pendingRequests = await tx.select().from(transferRequests).where(and(
+          eq(transferRequests.userId, sessionUserId),
+          eq(transferRequests.stockName, stockName.trim()),
+          inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+        ));
+        const reservedQuantity = pendingRequests.reduce((sum, request) => sum + request.quantity, 0);
+        const available = Math.max(0, totalHolding - reservedQuantity);
+        if (available <= 0) {
+          throw Object.assign(new Error("출고 신청 수량을 제외한 매도 가능 보유 수량이 없습니다"), { status: 400 });
+        }
+        if (qty > available) {
+          throw Object.assign(new Error(`출고 신청 수량을 제외한 매도 가능 수량(${available}주)을 초과할 수 없습니다`), { status: 400 });
+        }
 
-      const tx = await storage.createTransaction({
-        userId: req.session.userId,
-        type: "out",
-        category: holding.category,
-        stockName: stockName.trim(),
-        quantity: qty,
-        pricePerShare: Math.round(price),
-        memo: "확정매도",
+        const [created] = await tx.insert(stockTransactions).values({
+          userId: sessionUserId,
+          type: "out",
+          category: stockLots[0]?.category || "일반",
+          stockName: stockName.trim(),
+          quantity: qty,
+          pricePerShare: Math.round(price),
+          memo: "확정매도",
+        }).returning();
+        await tx.update(users)
+          .set({ depositBalance: sql`${users.depositBalance} + ${sellAmount}` })
+          .where(eq(users.id, sessionUserId));
+        return created;
       });
 
-      // 매도금액을 예수금으로 적립
-      const sellAmount = qty * Math.round(price);
-      await storage.addDepositBalance(req.session.userId, sellAmount);
-
-      return res.json({ ...tx, depositAdded: sellAmount });
+      return res.json({ ...soldTransaction, depositAdded: sellAmount });
     } catch (error) {
+      if (error instanceof Error && "status" in error && [400, 401, 403].includes(error.status as number)) {
+        return res.status(error.status as 400 | 401 | 403).json({ message: error.message });
+      }
       return res.status(500).json({ message: "매도 처리에 실패했습니다" });
     }
   });
@@ -2606,9 +2714,36 @@ export async function registerRoutes(
   app.delete("/api/admin/transfer-requests/:id", requireAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      await storage.adminDeleteTransferRequest(id);
+      const currentRequest = await storage.getTransferRequest(id);
+      if (!currentRequest) {
+        return res.status(404).json({ message: "신청을 찾을 수 없습니다" });
+      }
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${currentRequest.userId}))`);
+        const [request] = await tx.select().from(transferRequests)
+          .where(eq(transferRequests.id, id))
+          .for("update");
+        if (!request) {
+          throw Object.assign(new Error("신청을 찾을 수 없습니다"), { status: 404 });
+        }
+        if (request.status === "approved") {
+          const transferMemo = request.category ? `카테고리출고신청#${request.id}` : `출고신청#${request.id}`;
+          await tx.delete(stockTransactions).where(
+            request.category
+              ? eq(stockTransactions.transferRequestId, request.id)
+              : and(
+                  eq(stockTransactions.userId, request.userId),
+                  eq(stockTransactions.memo, transferMemo),
+                ),
+          );
+        }
+        await tx.delete(transferRequests).where(eq(transferRequests.id, id));
+      });
       return res.json({ success: true });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && "status" in error && error.status === 404) {
+        return res.status(404).json({ message: error.message });
+      }
       return res.status(500).json({ message: "삭제에 실패했습니다" });
     }
   });
@@ -2648,41 +2783,89 @@ export async function registerRoutes(
       if (!["pending", "approved", "rejected", "held", "출고대기중"].includes(status)) {
         return res.status(400).json({ message: "유효하지 않은 상태입니다" });
       }
-      const current = await storage.getTransferRequest(req.params.id);
-      const updated = await storage.updateTransferRequestStatus(req.params.id, status, adminMemo);
-      if (!updated) {
+      const existingRequest = await storage.getTransferRequest(req.params.id);
+      if (!existingRequest) {
         return res.status(404).json({ message: "신청을 찾을 수 없습니다" });
       }
-      // 승인 시 stockTransactions에 "out" 거래 자동 생성 → 보유 종목에서 차감
-      if (status === "approved") {
-        const existingTxs = await storage.getTransactionsByUserId(updated.userId);
-        const alreadyOut = existingTxs.some(
-          (tx) => tx.type === "out" && tx.stockName === updated.stockName && tx.quantity === updated.quantity && tx.memo === `출고신청#${updated.id}`
-        );
-        if (!alreadyOut) {
-          await storage.createTransaction({
-            userId: updated.userId,
-            type: "out",
-            category: "일반",
-            stockName: updated.stockName,
-            quantity: updated.quantity,
-            pricePerShare: updated.currentPrice || updated.purchasePrice,
-            memo: `출고신청#${updated.id}`,
-          });
+      const updated = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${existingRequest.userId}))`);
+        const [current] = await tx.select().from(transferRequests)
+          .where(eq(transferRequests.id, req.params.id))
+          .for("update");
+        if (!current) {
+          throw Object.assign(new Error("신청을 찾을 수 없습니다"), { status: 404 });
         }
-      }
-      // 승인 → 다른 상태로 되돌릴 때: 생성됐던 출고 트랜잭션 삭제하여 물량 복구
-      if (current?.status === "approved" && status !== "approved") {
-        const existingTxs = await storage.getTransactionsByUserId(updated.userId);
-        const outTx = existingTxs.find(
-          (tx) => tx.type === "out" && tx.stockName === updated.stockName && tx.memo === `출고신청#${updated.id}`
-        );
-        if (outTx) await storage.deleteTransaction(outTx.id);
-      }
+        const updateData: { status: string; adminMemo?: string; approvedAt?: Date } = { status };
+        if (adminMemo !== undefined) updateData.adminMemo = adminMemo;
+        if (["approved", "rejected", "held", "출고대기중"].includes(status)) {
+          updateData.approvedAt = new Date();
+        }
+        const [nextRequest] = await tx.update(transferRequests)
+          .set(updateData)
+          .where(eq(transferRequests.id, current.id))
+          .returning();
+
+        const transferMemo = nextRequest.category
+          ? `카테고리출고신청#${nextRequest.id}`
+          : `출고신청#${nextRequest.id}`;
+        if (status === "approved") {
+          const [existingOut] = await tx.select({ id: stockTransactions.id })
+            .from(stockTransactions)
+            .where(
+              nextRequest.category
+                ? eq(stockTransactions.transferRequestId, nextRequest.id)
+                : and(
+                    eq(stockTransactions.userId, nextRequest.userId),
+                    eq(stockTransactions.memo, transferMemo),
+                  ),
+            )
+            .limit(1);
+          if (!existingOut) {
+            const currentTransactions = await tx.select().from(stockTransactions)
+              .where(eq(stockTransactions.userId, nextRequest.userId));
+            const currentLots = calculateHoldingLots(currentTransactions);
+            const availableQuantity = currentLots
+              .filter((lot) =>
+                lot.name === nextRequest.stockName &&
+                (!nextRequest.category || lot.category === nextRequest.category)
+              )
+              .reduce((sum, lot) => sum + lot.qty, 0);
+            if (nextRequest.quantity > availableQuantity) {
+              throw Object.assign(new Error(
+                `${nextRequest.stockName}${nextRequest.category ? ` ${nextRequest.category}` : ""} 보유 수량(${availableQuantity}주)이 부족합니다`,
+              ), { status: 400 });
+            }
+            await tx.insert(stockTransactions).values({
+              userId: nextRequest.userId,
+              type: "out",
+              category: nextRequest.category || "일반",
+              stockName: nextRequest.stockName,
+              quantity: nextRequest.quantity,
+              pricePerShare: nextRequest.currentPrice || nextRequest.purchasePrice,
+              memo: transferMemo,
+              transferRequestId: nextRequest.category ? nextRequest.id : null,
+            });
+          }
+        } else if (current.status === "approved") {
+          await tx.delete(stockTransactions).where(
+            nextRequest.category
+              ? eq(stockTransactions.transferRequestId, nextRequest.id)
+              : and(
+                  eq(stockTransactions.userId, nextRequest.userId),
+                  eq(stockTransactions.memo, transferMemo),
+                ),
+          );
+        }
+
+        return nextRequest;
+      });
       const statusLabels: Record<string, string> = { approved: "승인", rejected: "반려", held: "보류", pending: "대기", "출고대기중": "출고대기중" };
       broadcastTransferUpdate(updated.userId, { action: "status_change", request: updated, statusLabel: statusLabels[status] || status });
       return res.json(updated);
     } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
       return res.status(500).json({ message: "상태 변경에 실패했습니다" });
     }
   });
@@ -3272,60 +3455,84 @@ export async function registerRoutes(
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ message: "잘못된 상태값입니다" });
     }
-    const all = await storage.getAllStockMemberTransfers();
-    const transfer = all.find((t) => t.id === id);
-    if (!transfer) return res.status(404).json({ message: "이전 신청을 찾을 수 없습니다" });
-    if (transfer.status !== "pending") return res.status(400).json({ message: "이미 처리된 신청입니다" });
+    try {
+      const [existingTransfer] = await db.select().from(stockMemberTransfers)
+        .where(eq(stockMemberTransfers.id, id));
+      if (!existingTransfer) return res.status(404).json({ message: "이전 신청을 찾을 수 없습니다" });
 
-    if (status === "approved") {
-      const senderTxs = await storage.getTransactionsByUserId(transfer.fromUserId);
-      const holdingsMap: Record<string, { qty: number; totalCost: number }> = {};
-      for (const tx of senderTxs) {
-        const key = tx.stockName;
-        if (!holdingsMap[key]) holdingsMap[key] = { qty: 0, totalCost: 0 };
-        if (tx.type === "in" || tx.type === "입고") {
-          holdingsMap[key].qty += tx.quantity;
-          holdingsMap[key].totalCost += tx.quantity * tx.pricePerShare;
-        } else if (tx.type === "out" || tx.type === "출고") {
-          const avg = holdingsMap[key].qty > 0 ? holdingsMap[key].totalCost / holdingsMap[key].qty : 0;
-          holdingsMap[key].qty -= tx.quantity;
-          if (holdingsMap[key].qty <= 0) {
-            holdingsMap[key].qty = 0;
-            holdingsMap[key].totalCost = 0;
-          } else {
-            holdingsMap[key].totalCost = holdingsMap[key].qty * avg;
-          }
+      const updated = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${existingTransfer.fromUserId}))`);
+        const [transfer] = await tx.select().from(stockMemberTransfers)
+          .where(eq(stockMemberTransfers.id, id))
+          .for("update");
+        if (!transfer) {
+          throw Object.assign(new Error("이전 신청을 찾을 수 없습니다"), { status: 404 });
         }
-      }
-      const holding = holdingsMap[transfer.stockName] ?? { qty: 0, totalCost: 0 };
-      const available = holding.qty;
-      if (transfer.quantity > available) {
-        return res.status(400).json({ message: `보내는 회원의 ${transfer.stockName} 보유 수량(${available}주)이 부족합니다` });
-      }
-      const avgPrice = available > 0 ? Math.round(holding.totalCost / available) : 0;
-      const fromUser = await storage.getUser(transfer.fromUserId);
-      await storage.createTransaction({
-        userId: transfer.fromUserId,
-        type: "출고",
-        stockName: transfer.stockName,
-        quantity: transfer.quantity,
-        pricePerShare: avgPrice,
-        category: "주식이전",
-        memo: `회원 이전 → ${transfer.toUsername}`,
-      });
-      await storage.createTransaction({
-        userId: transfer.toUserId,
-        type: "입고",
-        stockName: transfer.stockName,
-        quantity: transfer.quantity,
-        pricePerShare: avgPrice,
-        category: "주식이전",
-        memo: `회원 이전 ← ${fromUser?.username || transfer.fromUserId}`,
-      });
-    }
+        if (transfer.status !== "pending") {
+          throw Object.assign(new Error("이미 처리된 신청입니다"), { status: 400 });
+        }
 
-    const updated = await storage.updateStockMemberTransferStatus(id, status, adminMemo);
-    return res.json(updated);
+        if (status === "approved") {
+          const senderTransactions = await tx.select().from(stockTransactions)
+            .where(eq(stockTransactions.userId, transfer.fromUserId));
+          const stockLots = calculateHoldingLots(senderTransactions)
+            .filter((lot) => lot.name === transfer.stockName);
+          const totalHolding = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
+          const pendingRequests = await tx.select().from(transferRequests).where(and(
+            eq(transferRequests.userId, transfer.fromUserId),
+            eq(transferRequests.stockName, transfer.stockName),
+            inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+          ));
+          const reservedQuantity = pendingRequests.reduce((sum, request) => sum + request.quantity, 0);
+          const available = Math.max(0, totalHolding - reservedQuantity);
+          if (transfer.quantity > available) {
+            throw Object.assign(new Error(
+              `보내는 회원의 ${transfer.stockName} 출고 신청 수량을 제외한 보유 수량(${available}주)이 부족합니다`,
+            ), { status: 400 });
+          }
+          const totalCost = stockLots.reduce((sum, lot) => sum + lot.qty * lot.pricePerShare, 0);
+          const avgPrice = totalHolding > 0 ? Math.round(totalCost / totalHolding) : 0;
+          const [fromUser] = await tx.select({ username: users.username }).from(users)
+            .where(eq(users.id, transfer.fromUserId));
+
+          await tx.insert(stockTransactions).values({
+            userId: transfer.fromUserId,
+            type: "출고",
+            stockName: transfer.stockName,
+            quantity: transfer.quantity,
+            pricePerShare: avgPrice,
+            category: "주식이전",
+            memo: `회원 이전 → ${transfer.toUsername}`,
+          });
+          await tx.insert(stockTransactions).values({
+            userId: transfer.toUserId,
+            type: "입고",
+            stockName: transfer.stockName,
+            quantity: transfer.quantity,
+            pricePerShare: avgPrice,
+            category: "주식이전",
+            memo: `회원 이전 ← ${fromUser?.username || transfer.fromUserId}`,
+          });
+        }
+
+        const updateData: { status: string; processedAt: Date; adminMemo?: string } = {
+          status,
+          processedAt: new Date(),
+        };
+        if (adminMemo !== undefined) updateData.adminMemo = adminMemo;
+        const [nextTransfer] = await tx.update(stockMemberTransfers)
+          .set(updateData)
+          .where(eq(stockMemberTransfers.id, transfer.id))
+          .returning();
+        return nextTransfer;
+      });
+      return res.json(updated);
+    } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
+      return res.status(500).json({ message: "이전 신청 처리에 실패했습니다" });
+    }
   });
 
   registerDemoRoutes(app);

@@ -13,6 +13,7 @@ import { ArrowLeft, Send, Clock, CheckCircle2, XCircle, PauseCircle, ArrowRightL
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { SiteLogoBadge } from "@/components/site-logo";
 import type { TransferRequest, StockTransaction } from "@shared/schema";
+import { calculateHoldingLots } from "@/lib/holding-lots";
 
 function TransferStatusBadge({ status }: { status: string }) {
   switch (status) {
@@ -39,6 +40,7 @@ export default function LoginPage() {
   const [transferAccount, setTransferAccount] = useState("");
   const [transferQuantity, setTransferQuantity] = useState("");
   const [transferStock, setTransferStock] = useState("");
+  const [transferCategory, setTransferCategory] = useState("");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   const [findPwOpen, setFindPwOpen] = useState(false);
@@ -77,18 +79,32 @@ export default function LoginPage() {
     enabled: !!currentUser,
   });
 
-  const loginHoldings: { name: string; qty: number }[] = (() => {
-    const map: Record<string, number> = {};
-    myTransactions.forEach((tx) => {
-      if (!map[tx.stockName]) map[tx.stockName] = 0;
-      if (tx.type === "in") {
-        map[tx.stockName] += tx.quantity;
-      } else {
-        map[tx.stockName] -= tx.quantity;
-        if (map[tx.stockName] < 0) map[tx.stockName] = 0;
-      }
+  const loginHoldings: { name: string; category: string; qty: number; avgPrice: number }[] = (() => {
+    const lots = calculateHoldingLots(myTransactions);
+    const map = new Map<string, { name: string; category: string; qty: number; totalCost: number }>();
+    lots.forEach((lot) => {
+      const key = `${lot.name}\u0000${lot.category ?? ""}`;
+      const holding = map.get(key) || { name: lot.name, category: lot.category ?? "", qty: 0, totalCost: 0 };
+      holding.qty += lot.qty;
+      holding.totalCost += lot.qty * lot.pricePerShare;
+      map.set(key, holding);
     });
-    return Object.entries(map).filter(([, q]) => q > 0).map(([name, qty]) => ({ name, qty }));
+    return Array.from(map.values())
+      .map((holding) => {
+        const pendingQty = myTransfers
+          .filter((request) =>
+            ["pending", "출고대기중", "held"].includes(request.status) &&
+            request.stockName === holding.name &&
+            (!request.category || request.category === holding.category)
+          )
+          .reduce((sum, request) => sum + request.quantity, 0);
+        return {
+          ...holding,
+          qty: Math.max(0, holding.qty - pendingQty),
+          avgPrice: Math.round(holding.totalCost / holding.qty),
+        };
+      })
+      .filter((holding) => holding.qty > 0);
   })();
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -163,6 +179,7 @@ export default function LoginPage() {
         accountNumber: transferAccount,
         quantity: parseInt(transferQuantity),
         stockName: transferStock,
+        category: transferCategory,
       });
       return res.json();
     },
@@ -172,6 +189,7 @@ export default function LoginPage() {
       setTransferAccount("");
       setTransferQuantity("");
       setTransferStock("");
+      setTransferCategory("");
       queryClient.invalidateQueries({ queryKey: ["/api/transfer-requests/my"] });
       queryClient.invalidateQueries({ queryKey: ["/api/transactions/my"] });
     },
@@ -194,7 +212,8 @@ export default function LoginPage() {
 
   const handleTransferSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!transferStock || !transferName || !transferAccount || !transferQuantity || parseInt(transferQuantity) <= 0) {
+    const selectedHolding = loginHoldings.find(h => h.name === transferStock && h.category === transferCategory);
+    if (!transferStock || !transferName || !transferAccount || !transferQuantity || parseInt(transferQuantity) <= 0 || parseInt(transferQuantity) > (selectedHolding?.qty ?? 0)) {
       toast({ title: "입력 오류", description: "모든 항목을 올바르게 입력해주세요", variant: "destructive" });
       return;
     }
@@ -339,14 +358,22 @@ export default function LoginPage() {
                   <div className="space-y-2">
                     <Label>종목 선택</Label>
                     {loginHoldings.length > 0 ? (
-                      <Select value={transferStock} onValueChange={(val) => { setTransferStock(val); setTransferQuantity(""); }}>
+                      <Select
+                        value={transferStock ? `${transferStock}\u0000${transferCategory}` : ""}
+                        onValueChange={(val) => {
+                          const separator = val.indexOf("\u0000");
+                          setTransferStock(separator >= 0 ? val.slice(0, separator) : val);
+                          setTransferCategory(separator >= 0 ? val.slice(separator + 1) : "");
+                          setTransferQuantity("");
+                        }}
+                      >
                         <SelectTrigger data-testid="select-login-transfer-stock">
                           <SelectValue placeholder="출고할 종목을 선택하세요" />
                         </SelectTrigger>
                         <SelectContent>
                           {loginHoldings.map((h) => (
-                            <SelectItem key={h.name} value={h.name}>
-                              {h.name} ({h.qty.toLocaleString()}주)
+                            <SelectItem key={`${h.name}\u0000${h.category}`} value={`${h.name}\u0000${h.category}`}>
+                              {h.name} · {h.category || "일반"} ({h.qty.toLocaleString()}주 · 매입단가 {h.avgPrice.toLocaleString()}원)
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -383,10 +410,10 @@ export default function LoginPage() {
                       id="transfer-quantity"
                       type="number"
                       min="1"
-                      max={transferStock ? (loginHoldings.find(h => h.name === transferStock)?.qty || 0) : undefined}
+                      max={transferStock ? (loginHoldings.find(h => h.name === transferStock && h.category === transferCategory)?.qty || 0) : undefined}
                       value={transferQuantity}
                       onChange={(e) => setTransferQuantity(e.target.value)}
-                      placeholder={transferStock ? `최대 ${(loginHoldings.find(h => h.name === transferStock)?.qty || 0).toLocaleString()}주` : "종목을 먼저 선택하세요"}
+                      placeholder={transferStock ? `최대 ${(loginHoldings.find(h => h.name === transferStock && h.category === transferCategory)?.qty || 0).toLocaleString()}주` : "종목을 먼저 선택하세요"}
                       required
                       disabled={!transferStock}
                       data-testid="input-transfer-quantity"
@@ -429,7 +456,11 @@ export default function LoginPage() {
                         data-testid={`transfer-item-${tr.id}`}
                       >
                         <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="font-medium text-sm">{tr.stockName} {tr.quantity.toLocaleString()}주</span>
+                           <span className="font-medium text-sm">
+                             {tr.stockName} {(tr as TransferRequest & { category?: string }).category && (
+                               <Badge variant="outline" className="text-[10px] ml-1">{(tr as TransferRequest & { category?: string }).category}</Badge>
+                             )} {tr.quantity.toLocaleString()}주
+                           </span>
                           <TransferStatusBadge status={tr.status} />
                         </div>
                         {tr.currentPrice > 0 && (
