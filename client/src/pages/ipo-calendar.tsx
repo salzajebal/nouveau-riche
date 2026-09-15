@@ -5,6 +5,7 @@ import { ChevronRight, ChevronLeft, ChevronRight as ChevRight, Info, HelpCircle,
 import { SiteLogoBadge } from "@/components/site-logo";
 import { StockIcon } from "@/components/stock-icon";
 import { GlobalNav } from "@/components/global-nav";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { IpoStock } from "@shared/schema";
 
 type SidebarTab = "being" | "tobe";
@@ -22,6 +23,20 @@ interface NaverIpoItem {
   ipoDetailState?: string;
   hasSellBoard?: boolean;
   isAvail?: boolean;
+}
+
+interface SidebarIpoItem {
+  stockName: string;
+  stockCode?: string | null;
+  logoUrl?: string | null;
+  closedDate?: string;
+  offeringStartAt?: string;
+  minExpectedOfferPrice?: number;
+  maxExpectedOfferPrice?: number;
+  finalOfferPrice?: number | null;
+  instCompetitiveness?: number | null;
+  brokers?: string;
+  listingDate?: string;
 }
 
 interface NaverIpoCalendarData {
@@ -1207,6 +1222,7 @@ function CalendarSection() {
   const [calMonth, setCalMonth] = useState(today.getMonth());
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("being");
   const [sidebarPage, setSidebarPage] = useState(1);
+  const [selectedSidebarIpo, setSelectedSidebarIpo] = useState<SidebarIpoItem | null>(null);
 
   const { data: ipoApiData, isLoading } = useQuery<IpoCalendarApiResponse>({
     queryKey: ["/api/market/ipo-calendar"],
@@ -1581,7 +1597,14 @@ function CalendarSection() {
                 const dday = !isOngoing ? fmtDDay(ipo.offeringStartAt) : null;
                 const price = fmtPrice(ipo.minExpectedOfferPrice, ipo.maxExpectedOfferPrice, ipo.finalOfferPrice);
                 return (
-                  <div key={ipo.stockCode || `${ipo.stockName}-${i}`} className="border border-[#E0E2E4] rounded-xl overflow-hidden" data-testid={`sidebar-ipo-${i}`}>
+                  <button
+                    type="button"
+                    key={ipo.stockCode || `${ipo.stockName}-${i}`}
+                    onClick={() => setSelectedSidebarIpo(ipo)}
+                    className="w-full text-left border border-[#E0E2E4] rounded-xl overflow-hidden transition-colors hover:border-[#03C75A] focus:outline-none focus:ring-2 focus:ring-[#03C75A]/20"
+                    data-testid={`sidebar-ipo-${i}`}
+                    aria-label={`${ipo.stockName} 청약 상세정보 보기`}
+                  >
                     <div className="flex items-center gap-1.5 px-4 py-2 bg-[#F9FAFB] border-b border-[#E0E2E4]">
                       <span className={`text-[11px] font-bold ${isOngoing ? "text-[#03C75A]" : "text-[#9D9FA0]"}`}>
                         {isOngoing ? "진행중" : (dday || "예정")}
@@ -1603,7 +1626,7 @@ function CalendarSection() {
                       </div>
                       <ChevRight className="w-4 h-4 text-[#C5C7CB] shrink-0" />
                     </div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
@@ -1647,6 +1670,57 @@ function CalendarSection() {
               </button>
             </div>
           )}
+
+          <Dialog open={selectedSidebarIpo !== null} onOpenChange={(open) => { if (!open) setSelectedSidebarIpo(null); }}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-3">
+                  {selectedSidebarIpo && (
+                    <>
+                      <StockIcon name={selectedSidebarIpo.stockName} logoUrl={selectedSidebarIpo.logoUrl || undefined} size={36} />
+                      <span>{selectedSidebarIpo.stockName}</span>
+                    </>
+                  )}
+                </DialogTitle>
+              </DialogHeader>
+              {selectedSidebarIpo && (
+                <div className="divide-y divide-[#E0E2E4] border-y border-[#E0E2E4]">
+                  <div className="flex justify-between gap-4 py-3 text-sm">
+                    <span className="text-[#9D9FA0]">청약 기간</span>
+                    <span className="font-medium text-right">
+                      {selectedSidebarIpo.offeringStartAt ? fmtMD(selectedSidebarIpo.offeringStartAt) : "-"}
+                      {" ~ "}
+                      {selectedSidebarIpo.closedDate ? fmtMD(selectedSidebarIpo.closedDate) : "-"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 py-3 text-sm">
+                    <span className="text-[#9D9FA0]">공모가</span>
+                    <span className="font-medium text-right">
+                      {fmtPrice(selectedSidebarIpo.minExpectedOfferPrice, selectedSidebarIpo.maxExpectedOfferPrice, selectedSidebarIpo.finalOfferPrice)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 py-3 text-sm">
+                    <span className="text-[#9D9FA0]">기관경쟁률</span>
+                    <span className="font-medium text-right">
+                      {selectedSidebarIpo.instCompetitiveness != null
+                        ? `${Number(selectedSidebarIpo.instCompetitiveness).toLocaleString()}:1`
+                        : "-"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 py-3 text-sm">
+                    <span className="text-[#9D9FA0]">주관사</span>
+                    <span className="font-medium text-right">{selectedSidebarIpo.brokers || "-"}</span>
+                  </div>
+                  {selectedSidebarIpo.listingDate && (
+                    <div className="flex justify-between gap-4 py-3 text-sm">
+                      <span className="text-[#9D9FA0]">상장 예정일</span>
+                      <span className="font-medium text-right">{selectedSidebarIpo.listingDate}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
 
           {readyIPO.length > 0 && (
             <div className="mt-6">
