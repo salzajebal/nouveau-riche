@@ -2089,9 +2089,8 @@ function Footer() {
           <div className="shrink-0 flex items-center">
             <SiteLogoBadge size={40} />
           </div>
-          <div className="text-[11px] text-[#9D9FA0] leading-relaxed space-y-0.5 flex-1">
-            <p>(주)누보리치 &nbsp;|&nbsp; 사업자등록번호 555-81-01075 &nbsp;|&nbsp; 대표자 : 정혜원 &nbsp;|&nbsp; 설립일자 : 2018-08-20</p>
-            <p>주소 : 서울 송파구 법원로 96, 1001호 &nbsp;|&nbsp; © NOUVEAU RICHE</p>
+          <div className="text-[10px] xl:text-[11px] text-[#9D9FA0] leading-relaxed flex-1 min-w-0">
+            <p className="sm:whitespace-nowrap">(주)누보리치 &nbsp;|&nbsp; 사업자등록번호 555-81-01075 &nbsp;|&nbsp; 대표자 : 정혜원 &nbsp;|&nbsp; 설립일자 : 2018-08-20 &nbsp;|&nbsp; 주소 : 서울 송파구 법원로 96, 1001호 &nbsp;|&nbsp; © NOUVEAU RICHE</p>
           </div>
           <div className="shrink-0 flex items-center gap-2 border border-[#E0E2E4] rounded px-3 py-2 bg-white">
             <svg width="28" height="28" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
