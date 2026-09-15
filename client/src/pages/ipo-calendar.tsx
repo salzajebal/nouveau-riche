@@ -946,12 +946,18 @@ function CalendarIframeSection() {
         chartBody.replaceChildren();
         const wrap = doc.createElement("div");
         wrap.style.cssText = "height:260px;padding:14px 18px 0;";
+        const badgeRow = doc.createElement("div");
+        badgeRow.style.cssText = "display:flex;justify-content:center;margin-bottom:14px;";
         const badge = doc.createElement("div");
         badge.textContent = `조합 매수가 대비 ${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
-        badge.style.cssText = `display:inline-block;max-width:110px;margin-bottom:8px;padding:9px 11px;border-radius:8px;color:white;font-size:12px;font-weight:700;line-height:1.35;background:${rate >= 0 ? "#f04452" : "#3182f6"};`;
-        wrap.appendChild(badge);
+        badge.style.cssText = `position:relative;display:inline-block;max-width:150px;padding:9px 11px;border-radius:8px;color:white;font-size:12px;font-weight:700;line-height:1.35;text-align:center;background:${rate >= 0 ? "#f04452" : "#3182f6"};`;
+        const badgeTail = doc.createElement("span");
+        badgeTail.style.cssText = `position:absolute;left:50%;bottom:-7px;width:0;height:0;transform:translateX(-50%);border-left:7px solid transparent;border-right:7px solid transparent;border-top:8px solid ${rate >= 0 ? "#f04452" : "#3182f6"};`;
+        badge.appendChild(badgeTail);
+        badgeRow.appendChild(badge);
+        wrap.appendChild(badgeRow);
         const bars = doc.createElement("div");
-        bars.style.cssText = "height:190px;display:flex;align-items:flex-end;justify-content:center;gap:22px;padding:0 18px;";
+        bars.style.cssText = "height:176px;display:flex;align-items:flex-end;justify-content:center;gap:22px;padding:0 18px;";
         [
           { label: "조합 매수가", value: purchasePrice, color: "#FBD5D8" },
           { label: "현재 표시 가격", value: currentPrice, color: rate >= 0 ? "#F47480" : "#82B1FF" },
@@ -1711,9 +1717,16 @@ function TradeSection() {
                   const isProfit = changeRate >= 0;
                   return (
                     <div>
-                      <div className={`inline-block mb-3 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg leading-tight ${isProfit ? "bg-[#f04452]" : "bg-[#3182f6]"}`}>
-                        조합 매수가 대비<br />
-                        {changeRate > 0 ? "+" : ""}{changeRate.toFixed(2)}%
+                       <div className="mb-4 flex justify-center">
+                         <div className={`relative inline-block text-center text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg leading-tight ${isProfit ? "bg-[#f04452]" : "bg-[#3182f6]"}`}>
+                           조합 매수가 대비 {changeRate > 0 ? "+" : ""}{changeRate.toFixed(2)}%
+                           <span
+                             className={`absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[6px] border-x-transparent border-t-[7px] ${
+                               isProfit ? "border-t-[#f04452]" : "border-t-[#3182f6]"
+                             }`}
+                             aria-hidden="true"
+                           />
+                         </div>
                       </div>
                       <div className="flex items-end justify-around h-[170px] pb-1 gap-5 px-8">
                         {[

@@ -384,7 +384,7 @@ export async function registerRoutes(
         const blocked = await storage.isIpBlocked(ip);
         if (blocked) {
           if (req.path.startsWith("/api/") || !req.accepts("html")) {
-            return res.status(403).json({ message: "잠시 페이지 이용이 제한되었습니다" });
+            return res.status(403).json({ message: "정상적인 페이지 접근이 아닙니다." });
           }
 
           return res.status(403).type("html").send(`<!DOCTYPE html>
@@ -446,7 +446,7 @@ export async function registerRoutes(
   <body>
     <main>
       <div class="icon" aria-hidden="true">!</div>
-      <h1>잠시 페이지 이용이 제한되었습니다</h1>
+      <h1>정상적인 페이지 접근이 아닙니다.</h1>
       <p>안전한 서비스 이용을 위해 현재 접속을 확인하고 있습니다.<br />잠시 후 다시 이용해 주세요.</p>
       <p class="help">문제가 계속되면 고객센터로 문의해 주세요.</p>
     </main>
