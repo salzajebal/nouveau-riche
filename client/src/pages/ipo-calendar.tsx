@@ -846,6 +846,48 @@ function CalendarIframeSection() {
     if (footerCopyright) {
       footerCopyright.replaceChildren(doc.createTextNode("© NOUVEAU RICHE"));
     }
+    if (footer && !doc.getElementById("nouveau-footer-alignment")) {
+      const footerStyle = doc.createElement("style");
+      footerStyle.id = "nouveau-footer-alignment";
+      footerStyle.textContent = `
+        footer > .e13p78my3 {
+          display: flex !important;
+          align-items: center !important;
+          gap: 32px !important;
+        }
+        footer .e13p78my13 {
+          display: flex !important;
+          align-items: center !important;
+          flex: 0 0 auto !important;
+          margin: 0 !important;
+        }
+        footer .e13p78my2 {
+          flex: 1 1 auto !important;
+          width: auto !important;
+          margin: 0 !important;
+        }
+        footer .e13p78my1 {
+          margin: 0 !important;
+        }
+        footer .e13p78my12 {
+          display: flex !important;
+          align-items: center !important;
+          flex: 0 0 auto !important;
+          margin: 0 0 0 auto !important;
+        }
+        @media (max-width: 767px) {
+          footer > .e13p78my3 {
+            align-items: flex-start !important;
+            flex-direction: column !important;
+            gap: 16px !important;
+          }
+          footer .e13p78my12 {
+            margin-left: 0 !important;
+          }
+        }
+      `;
+      doc.head.appendChild(footerStyle);
+    }
     Array.from(doc.querySelectorAll("div")).forEach((element) => {
       if (/^Npay\s*Ustock$/i.test(element.textContent?.trim() || "") && element.querySelector("svg")) {
         const wordmark = doc.createElement("strong");
