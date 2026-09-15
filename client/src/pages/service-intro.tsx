@@ -23,7 +23,10 @@ export default function ServiceIntroPage() {
               <div className="text-slate-300 text-base sm:text-lg leading-relaxed max-w-xl mx-auto lg:mx-0 space-y-2">
                 <p>단주 거래 위주의 일반 시장에서 벗어나,</p>
                 <p>대형 자금 운용에 최적화된 비공개 1:1 프리미엄 매칭 솔루션을 선사합니다.</p>
-                <p>증권사 계좌 연동으로 비상장 주식 대형 블록딜을 가장 안전하게 거래해 보세요.</p>
+                <p>
+                  증권사 계좌 연동으로 비상장 주식 대형 블록딜을 가장{" "}
+                  <span className="whitespace-nowrap">안전하게 거래해 보세요.</span>
+                </p>
               </div>
               <div className="pt-2 flex justify-center lg:justify-start items-center gap-3">
                 <div className="flex items-center gap-2 bg-black/30 px-3 py-1.5 rounded-lg border border-white/10 text-xs sm:text-sm">
@@ -235,7 +238,8 @@ export default function ServiceIntroPage() {
             투명하고 합리적인 비상장 자산 운용의 표준
           </h2>
           <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl mx-auto">
-            <span className="text-[#00c73c] font-bold">개인투자조합</span> 및 <span className="text-[#00c73c] font-bold">벤처캐피탈(VC)</span> 지분 유동화 프로세스는 고도화된 자산 검증 인프라를 통해 안전하게 관리됩니다.<br className="hidden sm:block" />
+            <span className="text-[#00c73c] font-bold">개인투자조합</span> 및 <span className="text-[#00c73c] font-bold">벤처캐피탈(VC)</span> 지분 유동화 프로세스는 고도화된 자산 검증 인프라를 통해{" "}
+            <span className="whitespace-nowrap">안전하게 관리됩니다.</span><br className="hidden sm:block" />
             리스크 없는 깨끗한 거래 환경 속에서 핵심 자산의 미래 가치를 완벽하게 관리하고 실현해 보십시오.
           </p>
         </div>
