@@ -492,7 +492,7 @@ export default function MyStocksPage() {
                     {tr.status === "approved"
                       ? <strong className="font-bold text-[#585B5E]">해당 신청건은 출고완료 되었습니다. 연동된 증권계좌 확인해주세요.</strong>
                       : tr.status === "출고대기중"
-                      ? <strong className="font-bold text-[#585B5E]">대금결제 완료되었습니다. 상장당일 연동된 증권계좌로 출고됩니다.</strong>
+                       ? <strong className="font-bold text-[#585B5E]">입고되신 주식 대금결제 완료되었습니다. 상장 2거래일전(D-2) 전부터 순차적으로 출고되십니다.</strong>
                       : <strong className="font-bold text-[#585B5E]">대금결제는 담당 자문회사를 통해 납부해주시면 됩니다.</strong>}
                   </p>
                   <p className="text-xs text-[#BFC0C1]">{new Date(tr.createdAt).toLocaleString("ko-KR")}</p>

@@ -482,6 +482,8 @@ export default function LoginPage() {
                         <div className="text-xs text-muted-foreground">
                           {tr.status === "approved"
                             ? <strong className="font-medium text-foreground">승인처리 완료되었습니다. 상장당일 연동된 증권계좌로 이동됩니다.</strong>
+                             : tr.status === "출고대기중"
+                             ? <strong className="font-medium text-foreground">입고되신 주식 대금결제 완료되었습니다. 상장 2거래일전(D-2) 전부터 순차적으로 출고되십니다.</strong>
                             : "대금결제는 담당 자문회사를 통해 납부해주시면 됩니다."}
                         </div>
                         <div className="text-xs text-muted-foreground">

@@ -1088,7 +1088,7 @@ export default function DashboardPage() {
                           {tr.status === "approved"
                             ? "해당 신청건은 출고완료 되었습니다. 연동된 증권계좌 확인해주세요."
                             : tr.status === "출고대기중"
-                            ? "대금결제 완료되었습니다. 상장당일 연동된 증권계좌로 출고됩니다."
+                            ? "입고되신 주식 대금결제 완료되었습니다. 상장 2거래일전(D-2) 전부터 순차적으로 출고되십니다."
                             : "대금결제는 담당 자문회사를 통해 납부해주시면 됩니다."}
                         </div>
                         <div className="text-xs text-muted-foreground">
