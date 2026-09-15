@@ -3301,6 +3301,7 @@ export async function registerRoutes(
             const notification = JSON.stringify({
               type: "notification",
               data: {
+                messageId: msg.id,
                 roomId,
                 userName: user.fullName,
                 userUsername: user.username,

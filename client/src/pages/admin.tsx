@@ -23,7 +23,7 @@ import {
   Search, Trash2, LayoutDashboard, ClipboardList, Home, ChevronLeft, ChevronRight,
   Eye, EyeOff, Pencil, Snowflake, UserX, AlertTriangle, Save, X, ArrowRightLeft,
   CheckCircle2, XCircle, PauseCircle, Clock, MessageSquare, Send, Menu, Plus, BookOpen, Copy,
-  Bell, BellOff, Globe, Activity, GripVertical, ExternalLink, ToggleLeft, ToggleRight, Loader2, Ban, Shield, ImageIcon,
+  Bell, BellOff, Volume2, VolumeX, Globe, Activity, GripVertical, ExternalLink, ToggleLeft, ToggleRight, Loader2, Ban, Shield, ImageIcon,
   Banknote, TrendingDown, ChevronUp, ChevronDown,
 } from "lucide-react";
 
@@ -1973,6 +1973,12 @@ export default function AdminPage() {
   const [transferSoundEnabled, setTransferSoundEnabled] = useState<boolean>(() => {
     return localStorage.getItem("adminTransferSoundEnabled") !== "false";
   });
+  const [chatIndicatorEnabled, setChatIndicatorEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("adminChatIndicatorEnabled") !== "false";
+  });
+  const [chatSoundEnabled, setChatSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("adminChatSoundEnabled") !== "false";
+  });
   const [transferTab, setTransferTab] = useState<"all" | "pending" | "출고대기중" | "approved" | "rejected" | "held">("all");
   const [transferSearch, setTransferSearch] = useState("");
   const [filterTransferManager, setFilterTransferManager] = useState<string>("all");
@@ -1982,6 +1988,8 @@ export default function AdminPage() {
   const prevPendingCount = useRef<number | null>(null);
   const soundIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transferSoundEnabledRef = useRef(transferSoundEnabled);
+  const chatSoundEnabledRef = useRef(chatSoundEnabled);
+  const notifiedChatMessageIdsRef = useRef<Set<string>>(new Set());
 
   const setActiveSection = (section: AdminSection) => {
     setActiveSectionState(section);
@@ -2037,6 +2045,23 @@ export default function AdminPage() {
       const next = !prev;
       localStorage.setItem("adminTransferSoundEnabled", String(next));
       transferSoundEnabledRef.current = next;
+      return next;
+    });
+  };
+
+  const toggleChatIndicator = () => {
+    setChatIndicatorEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("adminChatIndicatorEnabled", String(next));
+      return next;
+    });
+  };
+
+  const toggleChatSound = () => {
+    setChatSoundEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("adminChatSoundEnabled", String(next));
+      chatSoundEnabledRef.current = next;
       return next;
     });
   };
@@ -2701,9 +2726,16 @@ export default function AdminPage() {
           setChatMessages((prev) => prev.map((m) => parsed.data.messageIds.includes(m.id) ? { ...m, isReadByMember: 1 } : m));
         }
         if (parsed.type === "notification") {
-          const audio = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbsGMcBj+a2telezhJj+DYrGQ/RG2q3+OiXzZEgNThpGc/SF+W4NqkZz1Bd9bnpmk7Rme15NSmaT1ER9bn0apjNkhfvOnSrWI0R2bC8NCtVjRJZMXw1atXM0xnzvfXrFQ0TGXL9NitVTBMZc741qtU");
-          audio.volume = 0.5;
-          audio.play().catch(() => {});
+          const messageId = parsed.data?.messageId;
+          if (messageId && notifiedChatMessageIdsRef.current.has(messageId)) return;
+          if (messageId) {
+            notifiedChatMessageIdsRef.current.add(messageId);
+            if (notifiedChatMessageIdsRef.current.size > 200) {
+              const oldestId = notifiedChatMessageIdsRef.current.values().next().value;
+              if (oldestId) notifiedChatMessageIdsRef.current.delete(oldestId);
+            }
+          }
+          if (chatSoundEnabledRef.current) playNotificationSound();
           toast({
             title: "새 상담 메시지",
             description: `${parsed.data.userName}: ${parsed.data.message.substring(0, 30)}${parsed.data.message.length > 30 ? "..." : ""}`,
@@ -3124,16 +3156,61 @@ export default function AdminPage() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="h-14 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-2 sm:gap-4 px-3 sm:px-6 shrink-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <button onClick={() => setMobileSidebarOpen(true)} className="md:hidden p-1 text-gray-500" data-testid="button-admin-mobile-menu">
               <Menu className="w-5 h-5" />
             </button>
-            <h1 className="font-bold text-base sm:text-lg text-gray-900" data-testid="text-admin-section-title">
+            <h1 className="truncate font-bold text-base sm:text-lg text-gray-900" data-testid="text-admin-section-title">
               {sidebarItems.find((i) => i.id === activeSection)?.label}
             </h1>
           </div>
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Badge variant="outline" className="border-gray-200 text-gray-500">Admin</Badge>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2 text-sm text-gray-500">
+            <button
+              type="button"
+              onClick={() => setActiveSection("chat")}
+              className={`relative inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatIndicatorEnabled && totalUnreadCount > 0
+                  ? "border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                  : "border-gray-200 bg-white text-gray-500 hover:bg-gray-100"
+              }`}
+              title={totalUnreadCount > 0 ? `읽지 않은 상담 ${totalUnreadCount}건` : "1:1 상담"}
+              aria-label={totalUnreadCount > 0 ? `읽지 않은 상담 ${totalUnreadCount}건 열기` : "1:1 상담 열기"}
+              data-testid="button-admin-chat-notifications"
+            >
+              <MessageSquare className="h-4 w-4" />
+              {chatIndicatorEnabled && totalUnreadCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-5 text-white">
+                  {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={toggleChatIndicator}
+              className={`inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatIndicatorEnabled ? "border-blue-200 bg-blue-50 text-blue-600" : "border-gray-200 bg-white text-gray-400"
+              }`}
+              title={chatIndicatorEnabled ? "상담 알림 표시 끄기" : "상담 알림 표시 켜기"}
+              aria-label={chatIndicatorEnabled ? "상담 알림 표시 끄기" : "상담 알림 표시 켜기"}
+              aria-pressed={chatIndicatorEnabled}
+              data-testid="button-admin-chat-indicator-toggle"
+            >
+              {chatIndicatorEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={toggleChatSound}
+              className={`inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatSoundEnabled ? "border-emerald-200 bg-emerald-50 text-emerald-600" : "border-gray-200 bg-white text-gray-400"
+              }`}
+              title={chatSoundEnabled ? "상담 알림음 끄기" : "상담 알림음 켜기"}
+              aria-label={chatSoundEnabled ? "상담 알림음 끄기" : "상담 알림음 켜기"}
+              aria-pressed={chatSoundEnabled}
+              data-testid="button-admin-chat-sound-toggle"
+            >
+              {chatSoundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
+            <Badge variant="outline" className="hidden sm:inline-flex border-gray-200 text-gray-500">Admin</Badge>
           </div>
         </header>
 

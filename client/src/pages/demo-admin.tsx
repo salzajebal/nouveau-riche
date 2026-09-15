@@ -21,7 +21,7 @@ import {
   Search, Trash2, LayoutDashboard, ClipboardList, Home, ChevronLeft, ChevronRight,
   Eye, Pencil, Snowflake, UserX, AlertTriangle, Save, X, ArrowRightLeft,
   CheckCircle2, XCircle, PauseCircle, Clock, MessageSquare, Send, Menu, Plus, BookOpen, Copy,
-  Bell, BellOff, Globe, Activity, ShieldAlert, GripVertical, ExternalLink, ToggleLeft, ToggleRight, Loader2, Ban, Shield, ImageIcon,
+  Bell, BellOff, Volume2, VolumeX, Globe, Activity, ShieldAlert, GripVertical, ExternalLink, ToggleLeft, ToggleRight, Loader2, Ban, Shield, ImageIcon,
 } from "lucide-react";
 
 const formatPct = (n: number) =>
@@ -1197,6 +1197,12 @@ export default function DemoAdminPage() {
   const [transferSoundEnabled, setTransferSoundEnabled] = useState<boolean>(() => {
     return localStorage.getItem("adminTransferSoundEnabled") !== "false";
   });
+  const [chatIndicatorEnabled, setChatIndicatorEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("adminChatIndicatorEnabled") !== "false";
+  });
+  const [chatSoundEnabled, setChatSoundEnabled] = useState<boolean>(() => {
+    return localStorage.getItem("adminChatSoundEnabled") !== "false";
+  });
   const [transferTab, setTransferTab] = useState<"all" | "pending" | "approved" | "rejected" | "held">("all");
   const [transferSearch, setTransferSearch] = useState("");
   const [filterTransferManager, setFilterTransferManager] = useState<string>("all");
@@ -1205,6 +1211,8 @@ export default function DemoAdminPage() {
   const prevPendingCount = useRef<number | null>(null);
   const soundIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transferSoundEnabledRef = useRef(transferSoundEnabled);
+  const chatSoundEnabledRef = useRef(chatSoundEnabled);
+  const notifiedChatMessageIdsRef = useRef<Set<string>>(new Set());
 
   const setActiveSection = (section: AdminSection) => {
     setActiveSectionState(section);
@@ -1264,6 +1272,23 @@ export default function DemoAdminPage() {
     });
   };
 
+  const toggleChatIndicator = () => {
+    setChatIndicatorEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("adminChatIndicatorEnabled", String(next));
+      return next;
+    });
+  };
+
+  const toggleChatSound = () => {
+    setChatSoundEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem("adminChatSoundEnabled", String(next));
+      chatSoundEnabledRef.current = next;
+      return next;
+    });
+  };
+
   const dismissAlert = () => {
     setAlertActive(false);
     if (soundIntervalRef.current) {
@@ -1290,6 +1315,7 @@ export default function DemoAdminPage() {
   const [filterTxManager, setFilterTxManager] = useState<string>("all");
   const [selectedChatRoom, setSelectedChatRoom] = useState<string | null>(null);
   const selectedChatRoomRef = useRef<string | null>(null);
+  const chatLoadRequestRef = useRef(0);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [chatInput, setChatInput] = useState("");
   const chatWsRef = useRef<WebSocket | null>(null);
@@ -1659,17 +1685,28 @@ export default function DemoAdminPage() {
 
   useEffect(() => {
     if (!authData?.user?.isAdmin) return;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
-    chatWsRef.current = ws;
-    ws.onmessage = (event) => {
-      try {
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let isClosed = false;
+
+    const connect = () => {
+      if (isClosed) return;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
+      chatWsRef.current = ws;
+      ws.onopen = () => {
+        const currentRoom = selectedChatRoomRef.current;
+        if (currentRoom) ws.send(JSON.stringify({ type: "join", roomId: currentRoom }));
+      };
+      ws.onmessage = (event) => {
+        try {
         const parsed = JSON.parse(event.data);
         if (parsed.type === "message" && parsed.data) {
-          setChatMessages((prev) => {
-            if (prev.some((m) => m.id === parsed.data.id)) return prev;
-            return [...prev, parsed.data];
-          });
+          if (parsed.data.roomId === selectedChatRoomRef.current) {
+            setChatMessages((prev) => {
+              if (prev.some((m) => m.id === parsed.data.id)) return prev;
+              return [...prev, parsed.data];
+            });
+          }
           if (parsed.data.senderRole === "user") {
             const currentRoom = selectedChatRoomRef.current;
             if (currentRoom && parsed.data.roomId === currentRoom) {
@@ -1682,9 +1719,16 @@ export default function DemoAdminPage() {
           }
         }
         if (parsed.type === "notification") {
-          const audio = new Audio("data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbsGMcBj+a2telezhJj+DYrGQ/RG2q3+OiXzZEgNThpGc/SF+W4NqkZz1Bd9bnpmk7Rme15NSmaT1ER9bn0apjNkhfvOnSrWI0R2bC8NCtVjRJZMXw1atXM0xnzvfXrFQ0TGXL9NitVTBMZc741qtU");
-          audio.volume = 0.5;
-          audio.play().catch(() => {});
+          const messageId = parsed.data?.messageId;
+          if (messageId && notifiedChatMessageIdsRef.current.has(messageId)) return;
+          if (messageId) {
+            notifiedChatMessageIdsRef.current.add(messageId);
+            if (notifiedChatMessageIdsRef.current.size > 200) {
+              const oldestId = notifiedChatMessageIdsRef.current.values().next().value;
+              if (oldestId) notifiedChatMessageIdsRef.current.delete(oldestId);
+            }
+          }
+          if (chatSoundEnabledRef.current) playNotificationSound();
           toast({
             title: "새 상담 메시지",
             description: `${parsed.data.userName}: ${parsed.data.message.substring(0, 30)}${parsed.data.message.length > 30 ? "..." : ""}`,
@@ -1706,10 +1750,20 @@ export default function DemoAdminPage() {
           queryClient.invalidateQueries({ queryKey: ["/api/demo-admin/transactions"] });
           queryClient.invalidateQueries({ queryKey: ["/api/demo-admin/users"] });
         }
-      } catch {}
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (!isClosed) reconnectTimer = setTimeout(connect, 2000);
+      };
     };
-    ws.onclose = () => {};
-    return () => { ws.close(); chatWsRef.current = null; };
+
+    connect();
+    return () => {
+      isClosed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      chatWsRef.current?.close();
+      chatWsRef.current = null;
+    };
   }, [authData?.user?.isAdmin]);
 
   useEffect(() => {
@@ -1722,18 +1776,30 @@ export default function DemoAdminPage() {
 
   useEffect(() => {
     if (!selectedChatRoom) return;
+    const roomId = selectedChatRoom;
+    const requestId = ++chatLoadRequestRef.current;
+    setChatMessages([]);
     async function loadMessages() {
       try {
-        const res = await fetch(`/api/chat/rooms/${selectedChatRoom}/messages`, { credentials: "include" });
+        const res = await fetch(`/api/chat/rooms/${roomId}/messages`, { credentials: "include" });
         if (res.ok) {
           const msgs = await res.json();
-          setChatMessages(msgs);
+          if (chatLoadRequestRef.current !== requestId || selectedChatRoomRef.current !== roomId) return;
+          setChatMessages((liveMessages) => {
+            const byId = new Map(msgs.map((message: any) => [message.id, message]));
+            for (const message of liveMessages) byId.set(message.id, message);
+            return Array.from(byId.values());
+          });
         }
-        await fetch(`/api/chat/rooms/${selectedChatRoom}/mark-read`, { method: "POST", credentials: "include" });
+        if (chatLoadRequestRef.current !== requestId || selectedChatRoomRef.current !== roomId) return;
+        await fetch(`/api/chat/rooms/${roomId}/mark-read`, { method: "POST", credentials: "include" });
         queryClient.invalidateQueries({ queryKey: ["/api/chat/rooms"] });
       } catch {}
     }
     loadMessages();
+    return () => {
+      if (chatLoadRequestRef.current === requestId) chatLoadRequestRef.current += 1;
+    };
   }, [selectedChatRoom]);
 
   const handleChatSend = () => {
@@ -2033,16 +2099,61 @@ export default function DemoAdminPage() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="h-14 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-2 sm:gap-4 px-3 sm:px-6 shrink-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <button onClick={() => setMobileSidebarOpen(true)} className="md:hidden p-1 text-gray-500" data-testid="button-admin-mobile-menu">
               <Menu className="w-5 h-5" />
             </button>
-            <h1 className="font-bold text-base sm:text-lg text-gray-900" data-testid="text-admin-section-title">
+            <h1 className="truncate font-bold text-base sm:text-lg text-gray-900" data-testid="text-admin-section-title">
               {sidebarItems.find((i) => i.id === activeSection)?.label}
             </h1>
           </div>
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Badge variant="outline" className="border-gray-200 text-gray-500">Admin</Badge>
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2 text-sm text-gray-500">
+            <button
+              type="button"
+              onClick={() => setActiveSection("chat")}
+              className={`relative inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatIndicatorEnabled && totalUnreadCount > 0
+                  ? "border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                  : "border-gray-200 bg-white text-gray-500 hover:bg-gray-100"
+              }`}
+              title={totalUnreadCount > 0 ? `읽지 않은 상담 ${totalUnreadCount}건` : "1:1 상담"}
+              aria-label={totalUnreadCount > 0 ? `읽지 않은 상담 ${totalUnreadCount}건 열기` : "1:1 상담 열기"}
+              data-testid="button-demo-admin-chat-notifications"
+            >
+              <MessageSquare className="h-4 w-4" />
+              {chatIndicatorEnabled && totalUnreadCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full bg-red-500 px-1 text-center text-[10px] font-bold leading-5 text-white">
+                  {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={toggleChatIndicator}
+              className={`inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatIndicatorEnabled ? "border-blue-200 bg-blue-50 text-blue-600" : "border-gray-200 bg-white text-gray-400"
+              }`}
+              title={chatIndicatorEnabled ? "상담 알림 표시 끄기" : "상담 알림 표시 켜기"}
+              aria-label={chatIndicatorEnabled ? "상담 알림 표시 끄기" : "상담 알림 표시 켜기"}
+              aria-pressed={chatIndicatorEnabled}
+              data-testid="button-demo-admin-chat-indicator-toggle"
+            >
+              {chatIndicatorEnabled ? <Bell className="h-4 w-4" /> : <BellOff className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={toggleChatSound}
+              className={`inline-flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-md border transition-colors ${
+                chatSoundEnabled ? "border-emerald-200 bg-emerald-50 text-emerald-600" : "border-gray-200 bg-white text-gray-400"
+              }`}
+              title={chatSoundEnabled ? "상담 알림음 끄기" : "상담 알림음 켜기"}
+              aria-label={chatSoundEnabled ? "상담 알림음 끄기" : "상담 알림음 켜기"}
+              aria-pressed={chatSoundEnabled}
+              data-testid="button-demo-admin-chat-sound-toggle"
+            >
+              {chatSoundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
+            <Badge variant="outline" className="hidden sm:inline-flex border-gray-200 text-gray-500">Admin</Badge>
           </div>
         </header>
 
