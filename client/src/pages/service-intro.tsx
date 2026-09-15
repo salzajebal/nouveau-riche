@@ -237,9 +237,10 @@ export default function ServiceIntroPage() {
           <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white leading-tight">
             투명하고 합리적인 비상장 자산 운용의 표준
           </h2>
-          <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-2xl mx-auto">
-            <span className="text-[#00c73c] font-bold">개인투자조합</span> 및 <span className="text-[#00c73c] font-bold">벤처캐피탈(VC)</span> 지분 유동화 프로세스는 고도화된 자산 검증 인프라를 통해{" "}
-            <span className="whitespace-nowrap">안전하게 관리됩니다.</span><br className="hidden sm:block" />
+          <p className="text-slate-300 text-sm sm:text-base leading-relaxed max-w-4xl mx-auto">
+            <span className="sm:whitespace-nowrap">
+              <span className="text-[#00c73c] font-bold">개인투자조합</span> 및 <span className="text-[#00c73c] font-bold">벤처캐피탈(VC)</span> 지분 유동화 프로세스는 고도화된 자산 검증 인프라를 통해 안전하게 관리됩니다.
+            </span><br className="hidden sm:block" />
             리스크 없는 깨끗한 거래 환경 속에서 핵심 자산의 미래 가치를 완벽하게 관리하고 실현해 보십시오.
           </p>
         </div>
