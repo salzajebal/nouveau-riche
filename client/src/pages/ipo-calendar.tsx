@@ -833,6 +833,7 @@ function CalendarIframeSection() {
         .replace(/Npay\s*비상장/gi, "누보리치")
         .replace(/pay\s*비상장/gi, "누보리치");
     const footer = doc.querySelector("footer");
+    footer?.querySelector(".e13p78my9")?.remove();
     const footerBrand = footer?.querySelector(".e13p78my13");
     if (footerBrand) {
       const brandLogo = doc.createElement("img");
