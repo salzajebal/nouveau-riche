@@ -19,6 +19,7 @@ import { calculateHoldingLots } from "@/lib/holding-lots";
 import { playNotificationSound, unlockNotificationSound } from "@/lib/notification-sound";
 import type { User, StockTransaction, TransferRequest, IpoStock, StockCatalog, DomainGroup, LoginLog, BlockedIp, StockMemberTransfer, UnionCode, DomainFallbackUrl, WithdrawRequest } from "@shared/schema";
 import { mergeChatSnapshot } from "@shared/chat-security";
+import { parseMemberTransferMemo } from "@shared/member-transfer";
 import {
   LogOut, Users, Package, ArrowDownRight, ArrowUpRight,
   Search, Trash2, LayoutDashboard, ClipboardList, Home, ChevronLeft, ChevronRight,
@@ -5391,7 +5392,8 @@ export default function AdminPage() {
                     {filtered.map((t) => {
                       const fromUser = (allUsers || []).find(u => u.id === t.fromUserId);
                       const fromName = fromUser?.fullName || fromUser?.username || t.fromUserId;
-                      const memo = memberTransferAdminMemo[t.id] ?? (t.adminMemo || "");
+                      const metadata = parseMemberTransferMemo(t.adminMemo);
+                      const memo = memberTransferAdminMemo[t.id] ?? metadata.adminMemo;
                       const statusLabel: Record<string, string> = { pending: "대기중", approved: "승인", rejected: "거부" };
                       const statusColor: Record<string, string> = { pending: "bg-yellow-100 text-yellow-700 border-yellow-200", approved: "bg-green-100 text-green-700 border-green-200", rejected: "bg-red-100 text-red-700 border-red-200" };
                       return (
@@ -5401,6 +5403,7 @@ export default function AdminPage() {
                               <div className="flex items-center gap-2 flex-wrap">
                                 <StockIcon name={t.stockName} size={20} />
                                 <span className="font-semibold text-sm">{t.stockName}</span>
+                                 {metadata.category && <Badge variant="outline" className="text-[10px]">{metadata.category}</Badge>}
                                 <span className="text-sm font-mono text-gray-700">{t.quantity.toLocaleString()}주</span>
                                 <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusColor[t.status] || "bg-gray-100 text-gray-500 border-gray-200"}`}>
                                   {statusLabel[t.status] || t.status}
@@ -5411,8 +5414,8 @@ export default function AdminPage() {
                                 <span className="flex items-center gap-1"><Send className="w-3 h-3" /> 받는 회원: <span className="font-medium text-gray-900">{t.toUsername}</span></span>
                               </div>
                               <div className="text-xs text-gray-400">{new Date(t.createdAt).toLocaleString("ko-KR")}</div>
-                              {t.adminMemo && t.status !== "pending" && (
-                                <div className="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1.5">메모: {t.adminMemo}</div>
+                              {metadata.adminMemo && t.status !== "pending" && (
+                                <div className="text-xs text-gray-500 bg-gray-50 rounded px-2 py-1.5">메모: {metadata.adminMemo}</div>
                               )}
                             </div>
                             {t.status === "pending" && (

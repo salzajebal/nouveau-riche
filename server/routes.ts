@@ -19,6 +19,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { DATABASE_URL } from "./db";
 import { canAccessChatRoom, canRecallAdminMessage, canSendChatMessage } from "@shared/chat-security";
 import { areTransferReservationsFulfillable, calculateHoldingLots, calculateTransferableHoldingLots } from "@shared/holding-lots";
+import { parseMemberTransferMemo, serializeMemberTransferMemo } from "@shared/member-transfer";
 
 const uploadDir = path.join(process.cwd(), "uploads", "chat");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -3597,8 +3598,8 @@ export async function registerRoutes(
   app.post("/api/stock-member-transfers", async (req, res) => {
     if (!req.session.userId) return res.status(401).json({ message: "로그인이 필요합니다" });
     try {
-      const { toUsername, stockName, quantity } = req.body;
-      if (!toUsername || !stockName || !quantity || quantity <= 0) {
+      const { toUsername, stockName, category, quantity } = req.body;
+      if (!toUsername || !stockName || !category || !quantity || quantity <= 0) {
         return res.status(400).json({ message: "입력값을 확인해주세요" });
       }
       const fromUser = await storage.getUser(req.session.userId);
@@ -3609,24 +3610,21 @@ export async function registerRoutes(
       if (toUser.id === req.session.userId) return res.status(400).json({ message: "자기 자신에게 이전할 수 없습니다" });
 
       const transactions = await storage.getTransactionsByUserId(req.session.userId);
-      const holdingsMap: Record<string, number> = {};
-      for (const tx of transactions) {
-        const key = tx.stockName;
-        if (!holdingsMap[key]) holdingsMap[key] = 0;
-        if (tx.type === "in" || tx.type === "입고") holdingsMap[key] += tx.quantity;
-        else if (tx.type === "out" || tx.type === "출고" || tx.type === "주식이전") holdingsMap[key] -= tx.quantity;
-      }
-      const available = holdingsMap[stockName] ?? 0;
-      if (available <= 0) return res.status(400).json({ message: `${stockName} 보유 수량이 없습니다` });
-      if (quantity > available) return res.status(400).json({ message: `${stockName} 보유 수량(${available}주)을 초과할 수 없습니다` });
+      const pendingRequests = await storage.getTransferRequestsByUserId(req.session.userId);
+      const available = calculateTransferableHoldingLots(calculateHoldingLots(transactions), pendingRequests)
+        .filter((lot) => lot.name === stockName && (lot.category || "미분류") === category)
+        .reduce((sum, lot) => sum + lot.qty, 0);
+      if (available <= 0) return res.status(400).json({ message: `${stockName} ${category} 보유 수량이 없습니다` });
+      if (quantity > available) return res.status(400).json({ message: `${stockName} ${category} 보유 수량(${available}주)을 초과할 수 없습니다` });
 
-      const transfer = await storage.createStockMemberTransfer({
+      const [transfer] = await db.insert(stockMemberTransfers).values({
         fromUserId: req.session.userId,
         toUserId: toUser.id,
         toUsername: toUser.username,
         stockName,
         quantity,
-      });
+        adminMemo: serializeMemberTransferMemo(category),
+      }).returning();
       return res.json(transfer);
     } catch (error) {
       return res.status(500).json({ message: "이전 신청에 실패했습니다" });
@@ -3668,6 +3666,7 @@ export async function registerRoutes(
         }
 
         if (status === "approved") {
+          const transferMetadata = parseMemberTransferMemo(transfer.adminMemo);
           const senderTransactions = await tx.select().from(stockTransactions)
             .where(eq(stockTransactions.userId, transfer.fromUserId));
           const holdingLots = calculateHoldingLots(senderTransactions);
@@ -3677,7 +3676,10 @@ export async function registerRoutes(
             inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
           ));
           const stockLots = calculateTransferableHoldingLots(holdingLots, pendingRequests)
-            .filter((lot) => lot.name === transfer.stockName);
+            .filter((lot) =>
+              lot.name === transfer.stockName &&
+              (!transferMetadata.category || (lot.category || "미분류") === transferMetadata.category)
+            );
           const available = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
           if (transfer.quantity > available) {
             throw Object.assign(new Error(
@@ -3699,7 +3701,7 @@ export async function registerRoutes(
               stockName: transfer.stockName,
               quantity: allocated,
               pricePerShare: lot.pricePerShare,
-              category: "주식이전",
+              category: transferMetadata.category || "주식이전",
               memo: `입고건차감#${lot.id}#회원 이전 → ${transfer.toUsername}`,
             });
             incomingValues.push({
@@ -3721,7 +3723,12 @@ export async function registerRoutes(
           status,
           processedAt: new Date(),
         };
-        if (adminMemo !== undefined) updateData.adminMemo = adminMemo;
+          const transferMetadata = parseMemberTransferMemo(transfer.adminMemo);
+          if (transferMetadata.category) {
+            updateData.adminMemo = serializeMemberTransferMemo(transferMetadata.category, adminMemo || "");
+          } else if (adminMemo !== undefined) {
+            updateData.adminMemo = adminMemo;
+          }
         const [nextTransfer] = await tx.update(stockMemberTransfers)
           .set(updateData)
           .where(eq(stockMemberTransfers.id, transfer.id))

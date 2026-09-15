@@ -27,6 +27,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { fetchStockPrices } from "@/lib/market-prices";
 import { calculateHoldingLots, calculateTransferableHoldingLots } from "@/lib/holding-lots";
+import { parseMemberTransferMemo } from "@shared/member-transfer";
 
 type DashSection = "overview" | "holdings" | "transactions" | "transfer" | "member-transfer" | "withdraw" | "profile";
 
@@ -119,6 +120,7 @@ export default function DashboardPage() {
   const [stockInStock, setStockInStock] = useState("");
   const [stockInQuantity, setStockInQuantity] = useState("");
   const [memberTransferStock, setMemberTransferStock] = useState("");
+  const [memberTransferCategory, setMemberTransferCategory] = useState("");
   const [memberTransferQuantity, setMemberTransferQuantity] = useState("");
   const [memberTransferToUsername, setMemberTransferToUsername] = useState("");
 
@@ -220,6 +222,7 @@ export default function DashboardPage() {
       const res = await apiRequest("POST", "/api/stock-member-transfers", {
         toUsername: memberTransferToUsername.trim(),
         stockName: memberTransferStock,
+        category: memberTransferCategory,
         quantity: parseInt(memberTransferQuantity),
       });
       return res.json();
@@ -227,6 +230,7 @@ export default function DashboardPage() {
     onSuccess: () => {
       toast({ title: "이전 신청 완료", description: `${memberTransferStock} ${parseInt(memberTransferQuantity).toLocaleString()}주 이전 신청이 접수되었습니다. 관리자 승인 후 처리됩니다.` });
       setMemberTransferStock("");
+      setMemberTransferCategory("");
       setMemberTransferQuantity("");
       setMemberTransferToUsername("");
       queryClient.invalidateQueries({ queryKey: ["/api/stock-member-transfers/my"] });
@@ -440,6 +444,16 @@ export default function DashboardPage() {
       const profitPct = v.totalCost > 0 ? ((profitLoss / v.totalCost) * 100) : 0;
       return { name, qty: v.qty, avgPrice, faceValue: faceValueMap[name] ?? null, currentPrice, evalAmount, totalCost: v.totalCost, profitLoss, profitPct, changePercent: market.changePercent };
     });
+
+  const memberTransferHoldings = Object.values(transferHoldings.reduce<Record<string, { name: string; category: string; qty: number }>>((result, lot) => {
+    const key = JSON.stringify([lot.name, lot.category || "미분류"]);
+    if (!result[key]) result[key] = { name: lot.name, category: lot.category || "미분류", qty: 0 };
+    result[key].qty += lot.qty;
+    return result;
+  }, {}));
+  const selectedMemberTransferHolding = memberTransferHoldings.find(
+    holding => holding.name === memberTransferStock && holding.category === memberTransferCategory,
+  );
 
   const holdingRows = categoryHoldingLots.map((lot) => {
     const market = priceData[lot.name] || { currentPrice: lot.pricePerShare, changePercent: 0 };
@@ -1134,14 +1148,22 @@ export default function DashboardPage() {
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label>이전할 종목</Label>
-                    <Select value={memberTransferStock} onValueChange={(val) => { setMemberTransferStock(val); setMemberTransferQuantity(""); }}>
+                    <Select
+                      value={memberTransferStock && memberTransferCategory ? JSON.stringify([memberTransferStock, memberTransferCategory]) : ""}
+                      onValueChange={(val) => {
+                        const [name, category] = JSON.parse(val) as [string, string];
+                        setMemberTransferStock(name);
+                        setMemberTransferCategory(category);
+                        setMemberTransferQuantity("");
+                      }}
+                    >
                       <SelectTrigger data-testid="select-member-transfer-stock">
                         <SelectValue placeholder="종목을 선택하세요" />
                       </SelectTrigger>
                       <SelectContent>
-                        {holdingsList.map((h) => (
-                          <SelectItem key={h.name} value={h.name}>
-                            {h.name} ({h.qty.toLocaleString()}주 보유)
+                        {memberTransferHoldings.map((h) => (
+                          <SelectItem key={`${h.name}-${h.category}`} value={JSON.stringify([h.name, h.category])}>
+                            {h.name} · {h.category} ({h.qty.toLocaleString()}주 보유)
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1151,7 +1173,7 @@ export default function DashboardPage() {
                     <div className="bg-muted/50 rounded-md p-3 text-sm">
                       <span className="text-muted-foreground">보유 수량: </span>
                       <span className="font-bold">
-                        {(holdingsList.find(h => h.name === memberTransferStock)?.qty || 0).toLocaleString()}주
+                        {(selectedMemberTransferHolding?.qty || 0).toLocaleString()}주
                       </span>
                     </div>
                   )}
@@ -1160,10 +1182,10 @@ export default function DashboardPage() {
                     <Input
                       type="number"
                       min="1"
-                      max={memberTransferStock ? (holdingsList.find(h => h.name === memberTransferStock)?.qty || 0) : undefined}
+                      max={selectedMemberTransferHolding?.qty}
                       value={memberTransferQuantity}
                       onChange={(e) => setMemberTransferQuantity(e.target.value)}
-                      placeholder={memberTransferStock ? `최대 ${(holdingsList.find(h => h.name === memberTransferStock)?.qty || 0).toLocaleString()}주` : "종목을 먼저 선택하세요"}
+                      placeholder={memberTransferStock ? `최대 ${(selectedMemberTransferHolding?.qty || 0).toLocaleString()}주` : "종목을 먼저 선택하세요"}
                       disabled={!memberTransferStock}
                       data-testid="input-member-transfer-quantity"
                     />
@@ -1184,8 +1206,9 @@ export default function DashboardPage() {
                       !memberTransferStock ||
                       !memberTransferQuantity ||
                       parseInt(memberTransferQuantity) <= 0 ||
+                      parseInt(memberTransferQuantity) > (selectedMemberTransferHolding?.qty || 0) ||
                       !memberTransferToUsername.trim() ||
-                      holdingsList.length === 0
+                      memberTransferHoldings.length === 0
                     }
                     onClick={() => memberTransferMutation.mutate()}
                     data-testid="button-submit-member-transfer"
@@ -1207,12 +1230,16 @@ export default function DashboardPage() {
                   </div>
                 ) : (
                   <div className="space-y-3 max-h-[480px] overflow-y-auto">
-                    {myMemberTransfers.map((mt) => (
+                    {myMemberTransfers.map((mt) => {
+                      const metadata = parseMemberTransferMemo(mt.adminMemo);
+                      return (
                       <div key={mt.id} className="border rounded-md p-3 space-y-2" data-testid={`member-transfer-item-${mt.id}`}>
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <div className="flex items-center gap-1.5">
                             <StockIcon name={mt.stockName} size={20} />
-                            <span className="font-medium text-sm">{mt.stockName} {mt.quantity.toLocaleString()}주</span>
+                            <span className="font-medium text-sm">
+                              {mt.stockName}{metadata.category ? ` · ${metadata.category}` : ""} {mt.quantity.toLocaleString()}주
+                            </span>
                           </div>
                           <TransferStatusBadge status={mt.status} />
                         </div>
@@ -1220,16 +1247,17 @@ export default function DashboardPage() {
                           <Send className="w-3 h-3" />
                           <span>받는 회원: <span className="font-medium text-foreground">{mt.toUsername}</span></span>
                         </div>
-                        {mt.adminMemo && (
+                        {metadata.adminMemo && (
                           <div className="text-xs text-muted-foreground bg-muted/50 rounded p-1.5">
-                            관리자 메모: {mt.adminMemo}
+                            관리자 메모: {metadata.adminMemo}
                           </div>
                         )}
                         <div className="text-xs text-muted-foreground">
                           {new Date(mt.createdAt).toLocaleString("ko-KR")}
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </Card>
