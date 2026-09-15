@@ -2079,18 +2079,17 @@ function Footer() {
   const modal = openModal ? FOOTER_MODALS[openModal] : null;
 
   return (
-    <footer className="bg-[#F9FAFB] border-t border-[#E0E2E4] mt-12" data-testid="footer">
+    <footer id="footer" className="bg-[#F9FAFB] border-t border-[#E0E2E4] mt-12" data-testid="footer">
       <div className="max-w-[1200px] mx-auto px-4 py-8">
-        <div className="flex items-center gap-1.5 mb-4">
-          <SiteLogoBadge size={40} />
-        </div>
-
-        <p className="text-[11px] text-[#9D9FA0] leading-relaxed mb-2">
+        <p className="text-[11px] text-[#9D9FA0] leading-relaxed mb-4">
           누보리치는 비상장주식 거래 정보를 제공하며, 투자 판단에 대한 책임은 투자자 본인에게 있습니다.
           비상장주식은 상장주식에 비해 유동성이 낮고 가격 변동성이 클 수 있으니 투자에 유의하시기 바랍니다.
         </p>
 
-        <div className="flex flex-col sm:flex-row items-start gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="shrink-0 flex items-center">
+            <SiteLogoBadge size={40} />
+          </div>
           <div className="text-[11px] text-[#9D9FA0] leading-relaxed space-y-0.5 flex-1">
             <p>(주)누보리치 &nbsp;|&nbsp; 사업자등록번호 555-81-01075 &nbsp;|&nbsp; 대표자 : 정혜원 &nbsp;|&nbsp; 설립일자 : 2018-08-20</p>
             <p>주소 : 서울 송파구 법원로 96, 1001호 &nbsp;|&nbsp; © NOUVEAU RICHE</p>
