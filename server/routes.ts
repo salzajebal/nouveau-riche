@@ -3391,9 +3391,11 @@ export async function registerRoutes(
 
   // WebSocket upgrade handler
   httpServer.on("upgrade", (request, socket, head) => {
-    if (request.url !== "/ws/chat" && request.url !== "/ws") {
+    const requestUrl = new URL(request.url || "/", "http://localhost");
+    if (requestUrl.pathname !== "/ws/chat" && requestUrl.pathname !== "/ws") {
       return;
     }
+    const requestedRole = requestUrl.searchParams.get("role");
 
     const sessionId = getVerifiedSessionId(request.headers.cookie || "");
     if (!sessionId) {
@@ -3402,7 +3404,15 @@ export async function registerRoutes(
     }
 
     wssSessionStore.get(sessionId, (err: any, sessionData: any) => {
-      const effectiveUserId = sessionData?.adminUserId || sessionData?.userId;
+      const hasAdminSession = !!sessionData?.adminUserId;
+      const hasMemberSession = !!sessionData?.userId;
+      const effectiveUserId = requestedRole === "admin"
+        ? sessionData?.adminUserId
+        : requestedRole === "member"
+          ? sessionData?.userId
+          : requestedRole || (hasAdminSession && hasMemberSession)
+            ? undefined
+            : sessionData?.adminUserId || sessionData?.userId;
       if (err || !sessionData || !effectiveUserId) {
         socket.destroy();
         return;
@@ -3410,7 +3420,11 @@ export async function registerRoutes(
 
       wss.handleUpgrade(request, socket, head, (ws) => {
         (ws as AuthenticatedWebSocket).userId = effectiveUserId;
-        wss.emit("connection", ws, request, { ...sessionData, _effectiveUserId: effectiveUserId });
+        wss.emit("connection", ws, request, {
+          ...sessionData,
+          _effectiveUserId: effectiveUserId,
+          _requestedRole: requestedRole,
+        });
       });
     });
   });

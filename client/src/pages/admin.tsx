@@ -2641,7 +2641,7 @@ export default function AdminPage() {
     const connect = () => {
       if (isClosed) return;
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat?role=admin`);
       chatWsRef.current = ws;
        ws.onopen = () => {
          const currentRoom = selectedChatRoomRef.current;

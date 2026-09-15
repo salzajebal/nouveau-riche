@@ -90,8 +90,9 @@ async function login(username: string, admin = false): Promise<SessionClient> {
   };
 }
 
-async function openSocket(client: SessionClient): Promise<WebSocket> {
-  const socket = new WebSocket(baseUrl.replace(/^http/, "ws") + "/ws/chat", {
+async function openSocket(client: SessionClient, role?: "member" | "admin"): Promise<WebSocket> {
+  const roleQuery = role ? `?role=${role}` : "";
+  const socket = new WebSocket(baseUrl.replace(/^http/, "ws") + `/ws/chat${roleQuery}`, {
     headers: { cookie: client.cookie },
   });
   await once(socket, "open");
@@ -115,8 +116,8 @@ function sessionIdFromCookie(cookie: string): string {
   return match[1];
 }
 
-async function assertSocketRejected(cookie?: string): Promise<void> {
-  const socket = new WebSocket(baseUrl.replace(/^http/, "ws") + "/ws/chat", {
+async function assertSocketRejected(cookie?: string, socketPath = "/ws/chat"): Promise<void> {
+  const socket = new WebSocket(baseUrl.replace(/^http/, "ws") + socketPath, {
     headers: cookie ? { cookie } : undefined,
   });
   let opened = false;
@@ -387,6 +388,71 @@ test("쿠키가 없거나 위조·만료된 세션의 WebSocket 연결을 거절
     [roomIds[0]],
   );
   assert.equal(result.rows[0].count, "0", "거절된 연결의 메시지는 저장되면 안 된다");
+});
+
+test("같은 세션의 회원·관리자 WebSocket은 요청한 역할로 분리되고 회원 메시지는 관리자에게 알림된다", async (t) => {
+  const member = await login(`${runId}_a`);
+  const sessionId = sessionIdFromCookie(member.cookie);
+  await pool.query(
+    `UPDATE session
+        SET sess = (sess::jsonb || jsonb_build_object('adminUserId', $2::text))::json
+      WHERE sid = $1`,
+    [sessionId, userIds[2]],
+  );
+
+  await assertSocketRejected(member.cookie);
+  await assertSocketRejected(member.cookie, "/ws/chat?role=unknown");
+
+  const memberSocket = await openSocket(member, "member");
+  const adminSocket = await openSocket(member, "admin");
+  t.after(() => {
+    memberSocket.close();
+    adminSocket.close();
+  });
+
+  const roomId = roomIds[0];
+  const memberJoined = await sendAndReceive(memberSocket, { type: "join", roomId, requestId: 1 });
+  assert.equal(memberJoined.type, "joined");
+  const adminJoined = await sendAndReceive(adminSocket, { type: "join", roomId, requestId: 1 });
+  assert.equal(adminJoined.type, "joined");
+
+  const adminFrames = new Promise<any[]>((resolve, reject) => {
+    const frames: any[] = [];
+    const timer = setTimeout(() => {
+      adminSocket.off("message", onMessage);
+      reject(new Error("Timed out waiting for member message and admin notification"));
+    }, 5_000);
+    const onMessage = (data: WebSocket.RawData) => {
+      frames.push(JSON.parse(data.toString()));
+      if (frames.length === 2) {
+        clearTimeout(timer);
+        adminSocket.off("message", onMessage);
+        resolve(frames);
+      }
+    };
+    adminSocket.on("message", onMessage);
+  });
+
+  const messageText = `dual-role-member-${Date.now()}`;
+  memberSocket.send(JSON.stringify({ type: "message", roomId, message: messageText }));
+  const frames = await adminFrames;
+  const deliveredMessage = frames.find((frame) => frame.type === "message");
+  const notification = frames.find((frame) => frame.type === "notification");
+
+  assert.equal(deliveredMessage?.data?.senderRole, "user");
+  assert.equal(deliveredMessage?.data?.senderId, userIds[0]);
+  assert.equal(deliveredMessage?.data?.message, messageText);
+  assert.equal(notification?.data?.roomId, roomId);
+  assert.equal(notification?.data?.message, messageText);
+
+  const persisted = await pool.query<{ sender_id: string; sender_role: string }>(
+    `SELECT sender_id, sender_role
+       FROM chat_messages
+      WHERE room_id = $1 AND message = $2`,
+    [roomId, messageText],
+  );
+  assert.equal(persisted.rowCount, 1);
+  assert.deepEqual(persisted.rows[0], { sender_id: userIds[0], sender_role: "user" });
 });
 
 test("실제 세션의 HTTP 및 WebSocket 연결에서 상담방이 회원별로 격리된다", async (t) => {

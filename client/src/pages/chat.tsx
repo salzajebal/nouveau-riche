@@ -77,7 +77,7 @@ export default function ChatPage() {
         setRoomId(room.id);
 
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat?role=member`);
         wsRef.current = ws;
 
         ws.onopen = () => {

@@ -334,7 +334,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!authData?.user) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws?role=member`);
     wsRef.current = ws;
     ws.onmessage = (event) => {
       try {
