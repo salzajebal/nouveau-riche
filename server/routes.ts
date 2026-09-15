@@ -382,7 +382,75 @@ export async function registerRoutes(
       if (ip) {
         const blocked = await storage.isIpBlocked(ip);
         if (blocked) {
-          return res.status(403).json({ message: "접근이 차단되었습니다" });
+          if (req.path.startsWith("/api/") || !req.accepts("html")) {
+            return res.status(403).json({ message: "잠시 페이지 이용이 제한되었습니다" });
+          }
+
+          return res.status(403).type("html").send(`<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>페이지 이용 안내 | 누보리치</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #2f3945;
+        color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+        text-align: center;
+      }
+      main { width: 100%; max-width: 520px; }
+      .icon {
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 2px solid #69bde7;
+        border-radius: 50%;
+        color: #69bde7;
+        font-size: 34px;
+        font-weight: 700;
+      }
+      h1 {
+        margin: 0 0 18px;
+        font-size: clamp(22px, 5vw, 30px);
+        line-height: 1.4;
+        font-weight: 650;
+      }
+      p {
+        margin: 0;
+        color: #c5ced8;
+        font-size: 15px;
+        line-height: 1.8;
+      }
+      .help {
+        margin-top: 24px;
+        padding-top: 24px;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        color: #9fabb8;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="icon" aria-hidden="true">!</div>
+      <h1>잠시 페이지 이용이 제한되었습니다</h1>
+      <p>안전한 서비스 이용을 위해 현재 접속을 확인하고 있습니다.<br />잠시 후 다시 이용해 주세요.</p>
+      <p class="help">문제가 계속되면 고객센터로 문의해 주세요.</p>
+    </main>
+  </body>
+</html>`);
         }
       }
     } catch {}
