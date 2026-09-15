@@ -365,6 +365,7 @@ export default function MyStocksPage() {
                         <div className="flex items-center gap-2">
                           <StockIcon name={tx.stockName} size={22} />
                           <span className="text-sm text-[#14181B]">{tx.stockName}</span>
+                          <Badge variant="outline" className="text-[10px]">{tx.category}</Badge>
                         </div>
                       </TableCell>
                       <TableCell className="text-right text-sm text-[#14181B]">{tx.quantity.toLocaleString()}주</TableCell>
@@ -389,7 +390,10 @@ export default function MyStocksPage() {
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <StockIcon name={tx.stockName} size={22} />
                       <div className="min-w-0">
-                        <span className="text-sm text-[#14181B] truncate block">{tx.stockName}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm text-[#14181B] truncate">{tx.stockName}</span>
+                          <Badge variant="outline" className="text-[10px] shrink-0">{tx.category}</Badge>
+                        </div>
                         <span className="text-[11px] text-[#9D9FA0]">{tx.createdAt ? new Date(tx.createdAt).toLocaleDateString("ko-KR") : "-"}</span>
                       </div>
                     </div>
