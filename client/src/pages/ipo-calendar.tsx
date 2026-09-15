@@ -944,13 +944,13 @@ function CalendarIframeSection() {
         chartName.appendChild(name);
         chartBody.replaceChildren();
         const wrap = doc.createElement("div");
-        wrap.style.cssText = "position:relative;height:240px;padding:18px 18px 0;";
+        wrap.style.cssText = "height:260px;padding:14px 18px 0;";
         const badge = doc.createElement("div");
         badge.textContent = `조합 매수가 대비 ${rate > 0 ? "+" : ""}${rate.toFixed(2)}%`;
-        badge.style.cssText = `position:absolute;left:18px;top:14px;z-index:2;max-width:110px;padding:9px 11px;border-radius:8px;color:white;font-size:12px;font-weight:700;line-height:1.35;background:${rate >= 0 ? "#f04452" : "#3182f6"};`;
+        badge.style.cssText = `display:inline-block;max-width:110px;margin-bottom:8px;padding:9px 11px;border-radius:8px;color:white;font-size:12px;font-weight:700;line-height:1.35;background:${rate >= 0 ? "#f04452" : "#3182f6"};`;
         wrap.appendChild(badge);
         const bars = doc.createElement("div");
-        bars.style.cssText = "height:210px;display:flex;align-items:flex-end;justify-content:center;gap:22px;padding:34px 18px 0;";
+        bars.style.cssText = "height:190px;display:flex;align-items:flex-end;justify-content:center;gap:22px;padding:0 18px;";
         [
           { label: "조합 매수가", value: purchasePrice, color: "#FBD5D8" },
           { label: "현재 표시 가격", value: currentPrice, color: rate >= 0 ? "#F47480" : "#82B1FF" },
@@ -1709,8 +1709,8 @@ function TradeSection() {
                   const currentHeight = Math.max(24, Math.round((currentPrice / maxValue) * 140));
                   const isProfit = changeRate >= 0;
                   return (
-                    <div className="relative">
-                      <div className={`absolute top-0 left-0 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg leading-tight z-10 ${isProfit ? "bg-[#f04452]" : "bg-[#3182f6]"}`}>
+                    <div>
+                      <div className={`inline-block mb-3 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg leading-tight ${isProfit ? "bg-[#f04452]" : "bg-[#3182f6]"}`}>
                         조합 매수가 대비<br />
                         {changeRate > 0 ? "+" : ""}{changeRate.toFixed(2)}%
                       </div>
