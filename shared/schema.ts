@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, bigint, timestamp, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, bigint, timestamp, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -39,7 +39,7 @@ export const stockTransactions = pgTable("stock_transactions", {
   hidden: boolean("hidden").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
-  transferRequestIdUnique: uniqueIndex("stock_transactions_transfer_request_id_unique")
+  transferRequestIdIndex: index("stock_transactions_transfer_request_id_idx")
     .on(table.transferRequestId)
     .where(sql`${table.transferRequestId} IS NOT NULL`),
 }));
@@ -109,6 +109,7 @@ export const transferRequests = pgTable("transfer_requests", {
   brokerName: text("broker_name").notNull().default(""),
   stockName: text("stock_name").notNull().default("비상장주식"),
   category: text("category"),
+  sourceLotId: varchar("source_lot_id"),
   quantity: integer("quantity").notNull(),
   purchasePrice: integer("purchase_price").notNull().default(0),
   currentPrice: integer("current_price").notNull().default(0),

@@ -39,11 +39,18 @@ try {
     ADD COLUMN IF NOT EXISTS "category" text
   `);
   await pool.query(`
+    ALTER TABLE "transfer_requests"
+    ADD COLUMN IF NOT EXISTS "source_lot_id" varchar
+  `);
+  await pool.query(`
     ALTER TABLE "stock_transactions"
     ADD COLUMN IF NOT EXISTS "transfer_request_id" varchar
   `);
   await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS "stock_transactions_transfer_request_id_unique"
+    DROP INDEX IF EXISTS "stock_transactions_transfer_request_id_unique"
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS "stock_transactions_transfer_request_id_idx"
     ON "stock_transactions" ("transfer_request_id")
     WHERE "transfer_request_id" IS NOT NULL
   `);

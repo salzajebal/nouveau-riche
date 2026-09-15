@@ -18,7 +18,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { DATABASE_URL } from "./db";
 import { canAccessChatRoom, canRecallAdminMessage, canSendChatMessage } from "@shared/chat-security";
-import { calculateHoldingLots } from "@shared/holding-lots";
+import { areTransferReservationsFulfillable, calculateHoldingLots, calculateTransferableHoldingLots } from "@shared/holding-lots";
 
 const uploadDir = path.join(process.cwd(), "uploads", "chat");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -1821,17 +1821,57 @@ export async function registerRoutes(
       const data = { ...parsed, transferRequestId: null };
       const transaction = await db.transaction(async (tx) => {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${data.userId}))`);
-        const [created] = await tx.insert(stockTransactions).values({
-          ...data,
-          createdAt: customDate ? new Date(customDate) : new Date(),
-        }).returning();
-        return created;
+        const transactionDate = customDate ? new Date(customDate) : new Date();
+        const isOutgoing = ["out", "출고", "내 계좌로 옮기기", "주식이전"].includes(data.type);
+        if (!isOutgoing) {
+          const [created] = await tx.insert(stockTransactions).values({
+            ...data,
+            createdAt: transactionDate,
+          }).returning();
+          return created;
+        }
+
+        const currentTransactions = await tx.select().from(stockTransactions)
+          .where(eq(stockTransactions.userId, data.userId));
+        const holdingLots = calculateHoldingLots(currentTransactions);
+        const pendingRequests = await tx.select().from(transferRequests).where(and(
+          eq(transferRequests.userId, data.userId),
+          inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+        ));
+        const availableLots = calculateTransferableHoldingLots(holdingLots, pendingRequests)
+          .filter((lot) => lot.name === data.stockName && lot.category === data.category);
+        const availableQuantity = availableLots.reduce((sum, lot) => sum + lot.qty, 0);
+        if (data.quantity > availableQuantity) {
+          throw Object.assign(new Error(
+            `${data.stockName} ${data.category} 출고 가능 수량(${availableQuantity}주)을 초과할 수 없습니다`,
+          ), { status: 400 });
+        }
+
+        let remaining = data.quantity;
+        const values = [];
+        for (const lot of availableLots) {
+          if (remaining <= 0) break;
+          const allocated = Math.min(lot.qty, remaining);
+          values.push({
+            ...data,
+            quantity: allocated,
+            category: lot.category,
+            memo: `입고건차감#${lot.id}#${data.memo || "관리자 출고"}`,
+            createdAt: transactionDate,
+          });
+          remaining -= allocated;
+        }
+        const created = await tx.insert(stockTransactions).values(values).returning();
+        return created[0];
       });
       broadcastTransactionUpdate(data.userId);
       return res.json(transaction);
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0].message });
+      }
+      if (error instanceof Error && "status" in error && error.status === 400) {
+        return res.status(400).json({ message: error.message });
       }
       return res.status(500).json({ message: "서버 오류가 발생했습니다" });
     }
@@ -2150,6 +2190,23 @@ export async function registerRoutes(
         if (locked.transferRequestId) {
           throw Object.assign(new Error("출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요"), { status: 400 });
         }
+        const [activeRequest] = await tx.select({ id: transferRequests.id })
+          .from(transferRequests)
+          .where(and(
+            eq(transferRequests.userId, locked.userId),
+            inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+          ))
+          .limit(1);
+        if (activeRequest) {
+          throw Object.assign(new Error("대기 중인 출고 신청이 있으면 거래 내역을 변경할 수 없습니다"), { status: 400 });
+        }
+        const [linkedRequest] = await tx.select({ id: transferRequests.id })
+          .from(transferRequests)
+          .where(eq(transferRequests.sourceLotId, locked.id))
+          .limit(1);
+        if (linkedRequest) {
+          throw Object.assign(new Error("출고 신청과 연결된 입고 건은 신청을 먼저 삭제한 뒤 변경해주세요"), { status: 400 });
+        }
         const [updated] = await tx.update(stockTransactions)
           .set(updateData)
           .where(eq(stockTransactions.id, locked.id))
@@ -2181,6 +2238,26 @@ export async function registerRoutes(
           if (!locked) return;
           if (locked.transferRequestId) {
             throw Object.assign(new Error("출고 신청으로 생성된 거래는 신청 상태에서 변경해주세요"), { status: 400 });
+          }
+          const isIncoming = locked.type === "in" || locked.type === "입고";
+          if (isIncoming) {
+            const [activeRequest] = await transaction.select({ id: transferRequests.id })
+              .from(transferRequests)
+              .where(and(
+                eq(transferRequests.userId, locked.userId),
+                inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+              ))
+              .limit(1);
+            if (activeRequest) {
+              throw Object.assign(new Error("대기 중인 출고 신청이 있으면 입고 내역을 삭제할 수 없습니다"), { status: 400 });
+            }
+          }
+          const [linkedRequest] = await transaction.select({ id: transferRequests.id })
+            .from(transferRequests)
+            .where(eq(transferRequests.sourceLotId, locked.id))
+            .limit(1);
+          if (linkedRequest) {
+            throw Object.assign(new Error("출고 신청과 연결된 입고 건은 신청을 먼저 삭제한 뒤 삭제해주세요"), { status: 400 });
           }
           await transaction.delete(stockTransactions).where(eq(stockTransactions.id, locked.id));
         });
@@ -2264,65 +2341,84 @@ export async function registerRoutes(
         const transactions = await tx.select().from(stockTransactions)
           .where(eq(stockTransactions.userId, sessionUserId));
         const holdingLots = calculateHoldingLots(transactions);
-        const holdingKey = (stockName: string, category: string) => `${stockName}\u0000${category}`;
-        const holdingsMap = new Map<string, { stockName: string; category: string; qty: number }>();
-        for (const lot of holdingLots) {
-          const key = holdingKey(lot.name, lot.category);
-          const holding = holdingsMap.get(key) || { stockName: lot.name, category: lot.category, qty: 0 };
-          holding.qty += lot.qty;
-          holdingsMap.set(key, holding);
-        }
-
+        const requestedSourceLotId = (data.sourceLotId || "").trim();
         let requestedCategory = (data.category || "").trim();
-        const matchingHoldings = Array.from(holdingsMap.values()).filter((holding) => holding.stockName === requestedStock);
-        if (!requestedCategory) {
-          if (matchingHoldings.length === 1) {
-            requestedCategory = matchingHoldings[0].category;
-          } else {
-            throw Object.assign(new Error(`${requestedStock}의 출고 카테고리를 선택해주세요`), { status: 400 });
-          }
-        }
-
-        const selectedHolding = holdingsMap.get(holdingKey(requestedStock, requestedCategory));
-        if (!selectedHolding?.qty) {
-          throw Object.assign(new Error(`${requestedStock} ${requestedCategory} 보유 수량이 없습니다`), { status: 400 });
-        }
-
         const pendingRequests = await tx.select().from(transferRequests).where(and(
           eq(transferRequests.userId, sessionUserId),
           inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
         ));
-        let categorizedPendingQty = 0;
-        let legacyPendingQty = 0;
-        for (const pendingRequest of pendingRequests) {
-          if (pendingRequest.stockName !== requestedStock) continue;
-          if (pendingRequest.category === requestedCategory) categorizedPendingQty += pendingRequest.quantity || 0;
-          if (!pendingRequest.category) legacyPendingQty += pendingRequest.quantity || 0;
-        }
-        const alreadyPending = categorizedPendingQty + legacyPendingQty;
-        const available = Math.max(0, selectedHolding.qty - alreadyPending);
-        if (data.quantity > available) {
-          throw Object.assign(new Error(
-            `${requestedStock} ${requestedCategory} 잔여 신청 가능 수량(${available}주)을 초과할 수 없습니다. (보유 ${selectedHolding.qty}주 - 신청중 ${alreadyPending}주)`,
-          ), { status: 400 });
-        }
+        let avgPurchasePrice = 0;
 
-        const selectedLots = holdingLots.filter(
-          (lot) => lot.name === requestedStock && lot.category === requestedCategory,
-        );
-        let pendingToSkip = alreadyPending;
-        let quantityToPrice = data.quantity;
-        let purchaseCost = 0;
-        for (const lot of selectedLots) {
-          const skipped = Math.min(lot.qty, pendingToSkip);
-          pendingToSkip -= skipped;
-          const lotAvailable = lot.qty - skipped;
-          const pricedQuantity = Math.min(lotAvailable, quantityToPrice);
-          purchaseCost += pricedQuantity * lot.pricePerShare;
-          quantityToPrice -= pricedQuantity;
-          if (quantityToPrice <= 0) break;
+        if (requestedSourceLotId) {
+          const sourceLot = holdingLots.find((lot) => lot.id === requestedSourceLotId);
+          if (!sourceLot || sourceLot.name !== requestedStock) {
+            throw Object.assign(new Error("선택한 입고 건을 보유 내역에서 찾을 수 없습니다"), { status: 400 });
+          }
+          if (requestedCategory && requestedCategory !== sourceLot.category) {
+            throw Object.assign(new Error("선택한 입고 건의 카테고리가 일치하지 않습니다"), { status: 400 });
+          }
+          requestedCategory = sourceLot.category;
+          const availableLot = calculateTransferableHoldingLots(holdingLots, pendingRequests)
+            .find((lot) => lot.id === requestedSourceLotId);
+          const available = availableLot?.qty || 0;
+          if (data.quantity > available) {
+            throw Object.assign(new Error(
+              `${requestedStock} ${requestedCategory} ${sourceLot.pricePerShare.toLocaleString()}원 입고 건의 잔여 신청 가능 수량(${available}주)을 초과할 수 없습니다`,
+            ), { status: 400 });
+          }
+          avgPurchasePrice = sourceLot.pricePerShare;
+        } else {
+          const holdingKey = (stockName: string, category: string) => `${stockName}\u0000${category}`;
+          const holdingsMap = new Map<string, { stockName: string; category: string; qty: number }>();
+          for (const lot of holdingLots) {
+            const key = holdingKey(lot.name, lot.category);
+            const holding = holdingsMap.get(key) || { stockName: lot.name, category: lot.category, qty: 0 };
+            holding.qty += lot.qty;
+            holdingsMap.set(key, holding);
+          }
+          const matchingHoldings = Array.from(holdingsMap.values()).filter((holding) => holding.stockName === requestedStock);
+          if (!requestedCategory) {
+            if (matchingHoldings.length === 1) {
+              requestedCategory = matchingHoldings[0].category;
+            } else {
+              throw Object.assign(new Error(`${requestedStock}의 출고 카테고리를 선택해주세요`), { status: 400 });
+            }
+          }
+          const selectedHolding = holdingsMap.get(holdingKey(requestedStock, requestedCategory));
+          if (!selectedHolding?.qty) {
+            throw Object.assign(new Error(`${requestedStock} ${requestedCategory} 보유 수량이 없습니다`), { status: 400 });
+          }
+          let categorizedPendingQty = 0;
+          let legacyPendingQty = 0;
+          for (const pendingRequest of pendingRequests) {
+            if (pendingRequest.stockName !== requestedStock) continue;
+            if (pendingRequest.category === requestedCategory) categorizedPendingQty += pendingRequest.quantity || 0;
+            if (!pendingRequest.category) legacyPendingQty += pendingRequest.quantity || 0;
+          }
+          const alreadyPending = categorizedPendingQty + legacyPendingQty;
+          const available = Math.max(0, selectedHolding.qty - alreadyPending);
+          if (data.quantity > available) {
+            throw Object.assign(new Error(
+              `${requestedStock} ${requestedCategory} 잔여 신청 가능 수량(${available}주)을 초과할 수 없습니다. (보유 ${selectedHolding.qty}주 - 신청중 ${alreadyPending}주)`,
+            ), { status: 400 });
+          }
+          const selectedLots = holdingLots.filter(
+            (lot) => lot.name === requestedStock && lot.category === requestedCategory,
+          );
+          let pendingToSkip = alreadyPending;
+          let quantityToPrice = data.quantity;
+          let purchaseCost = 0;
+          for (const lot of selectedLots) {
+            const skipped = Math.min(lot.qty, pendingToSkip);
+            pendingToSkip -= skipped;
+            const lotAvailable = lot.qty - skipped;
+            const pricedQuantity = Math.min(lotAvailable, quantityToPrice);
+            purchaseCost += pricedQuantity * lot.pricePerShare;
+            quantityToPrice -= pricedQuantity;
+            if (quantityToPrice <= 0) break;
+          }
+          avgPurchasePrice = Math.round(purchaseCost / data.quantity);
         }
-        const avgPurchasePrice = Math.round(purchaseCost / data.quantity);
         const currentPrice = marketPrice || avgPurchasePrice;
         const totalAmount = currentPrice * data.quantity;
         const profitRate = avgPurchasePrice > 0
@@ -2335,6 +2431,7 @@ export async function registerRoutes(
           brokerName: user.bank || "",
           stockName: requestedStock,
           category: requestedCategory,
+          sourceLotId: requestedSourceLotId || null,
           purchasePrice: avgPurchasePrice,
           currentPrice,
           totalAmount,
@@ -2561,15 +2658,14 @@ export async function registerRoutes(
         const transactions = await tx.select().from(stockTransactions)
           .where(eq(stockTransactions.userId, sessionUserId));
         const lots = calculateHoldingLots(transactions);
-        const stockLots = lots.filter((lot) => lot.name === stockName.trim());
-        const totalHolding = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
         const pendingRequests = await tx.select().from(transferRequests).where(and(
           eq(transferRequests.userId, sessionUserId),
           eq(transferRequests.stockName, stockName.trim()),
           inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
         ));
-        const reservedQuantity = pendingRequests.reduce((sum, request) => sum + request.quantity, 0);
-        const available = Math.max(0, totalHolding - reservedQuantity);
+        const stockLots = calculateTransferableHoldingLots(lots, pendingRequests)
+          .filter((lot) => lot.name === stockName.trim());
+        const available = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
         if (available <= 0) {
           throw Object.assign(new Error("출고 신청 수량을 제외한 매도 가능 보유 수량이 없습니다"), { status: 400 });
         }
@@ -2577,19 +2673,27 @@ export async function registerRoutes(
           throw Object.assign(new Error(`출고 신청 수량을 제외한 매도 가능 수량(${available}주)을 초과할 수 없습니다`), { status: 400 });
         }
 
-        const [created] = await tx.insert(stockTransactions).values({
-          userId: sessionUserId,
-          type: "out",
-          category: stockLots[0]?.category || "일반",
-          stockName: stockName.trim(),
-          quantity: qty,
-          pricePerShare: Math.round(price),
-          memo: "확정매도",
-        }).returning();
+        let remaining = qty;
+        const sellValues = [];
+        for (const lot of stockLots) {
+          if (remaining <= 0) break;
+          const allocated = Math.min(lot.qty, remaining);
+          sellValues.push({
+            userId: sessionUserId,
+            type: "out",
+            category: lot.category,
+            stockName: stockName.trim(),
+            quantity: allocated,
+            pricePerShare: Math.round(price),
+            memo: `입고건차감#${lot.id}#확정매도`,
+          });
+          remaining -= allocated;
+        }
+        const created = await tx.insert(stockTransactions).values(sellValues).returning();
         await tx.update(users)
           .set({ depositBalance: sql`${users.depositBalance} + ${sellAmount}` })
           .where(eq(users.id, sessionUserId));
-        return created;
+        return created[0];
       });
 
       return res.json({ ...soldTransaction, depositAdded: sellAmount });
@@ -2727,15 +2831,12 @@ export async function registerRoutes(
           throw Object.assign(new Error("신청을 찾을 수 없습니다"), { status: 404 });
         }
         if (request.status === "approved") {
-          const transferMemo = request.category ? `카테고리출고신청#${request.id}` : `출고신청#${request.id}`;
-          await tx.delete(stockTransactions).where(
-            request.category
-              ? eq(stockTransactions.transferRequestId, request.id)
-              : and(
-                  eq(stockTransactions.userId, request.userId),
-                  eq(stockTransactions.memo, transferMemo),
-                ),
-          );
+          const legacyTransferMemo = request.category ? `카테고리출고신청#${request.id}` : `출고신청#${request.id}`;
+          await tx.delete(stockTransactions).where(eq(stockTransactions.transferRequestId, request.id));
+          await tx.delete(stockTransactions).where(and(
+            eq(stockTransactions.userId, request.userId),
+            eq(stockTransactions.memo, legacyTransferMemo),
+          ));
         }
         await tx.delete(transferRequests).where(eq(transferRequests.id, id));
       });
@@ -2769,10 +2870,45 @@ export async function registerRoutes(
     try {
       const { createdAt } = req.body;
       if (!createdAt) return res.status(400).json({ message: "날짜가 필요합니다" });
-      const updated = await storage.updateTransferRequestDate(req.params.id, new Date(createdAt));
-      if (!updated) return res.status(404).json({ message: "신청을 찾을 수 없습니다" });
+      const nextCreatedAt = new Date(createdAt);
+      if (Number.isNaN(nextCreatedAt.getTime())) {
+        return res.status(400).json({ message: "날짜 형식이 올바르지 않습니다" });
+      }
+      const existingRequest = await storage.getTransferRequest(req.params.id);
+      if (!existingRequest) return res.status(404).json({ message: "신청을 찾을 수 없습니다" });
+      const updated = await db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${existingRequest.userId}))`);
+        const [current] = await tx.select().from(transferRequests)
+          .where(eq(transferRequests.id, req.params.id))
+          .for("update");
+        if (!current) {
+          throw Object.assign(new Error("신청을 찾을 수 없습니다"), { status: 404 });
+        }
+        if (["pending", "출고대기중", "held"].includes(current.status)) {
+          const transactions = await tx.select().from(stockTransactions)
+            .where(eq(stockTransactions.userId, current.userId));
+          const activeRequests = await tx.select().from(transferRequests).where(and(
+            eq(transferRequests.userId, current.userId),
+            inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+          ));
+          const reorderedRequests = activeRequests.map((request) =>
+            request.id === current.id ? { ...request, createdAt: nextCreatedAt } : request
+          );
+          if (!areTransferReservationsFulfillable(calculateHoldingLots(transactions), reorderedRequests)) {
+            throw Object.assign(new Error("날짜를 변경하면 출고 예약 수량이 보유 수량을 초과합니다"), { status: 400 });
+          }
+        }
+        const [next] = await tx.update(transferRequests)
+          .set({ createdAt: nextCreatedAt })
+          .where(eq(transferRequests.id, current.id))
+          .returning();
+        return next;
+      });
       return res.json(updated);
     } catch (error) {
+      if (error instanceof Error && "status" in error && (error.status === 400 || error.status === 404)) {
+        return res.status(error.status).json({ message: error.message });
+      }
       return res.status(500).json({ message: "날짜 변경에 실패했습니다" });
     }
   });
@@ -2795,6 +2931,35 @@ export async function registerRoutes(
         if (!current) {
           throw Object.assign(new Error("신청을 찾을 수 없습니다"), { status: 404 });
         }
+        const nextIsActive = ["pending", "출고대기중", "held"].includes(status);
+        const currentIsActive = ["pending", "출고대기중", "held"].includes(current.status);
+        if (nextIsActive && !currentIsActive) {
+          const currentLegacyMemo = current.sourceLotId
+            ? `입고건출고신청#${current.id}#${current.sourceLotId}`
+            : current.category
+              ? `카테고리출고신청#${current.id}`
+              : `출고신청#${current.id}`;
+          if (current.status === "approved") {
+            await tx.delete(stockTransactions).where(eq(stockTransactions.transferRequestId, current.id));
+            await tx.delete(stockTransactions).where(and(
+              eq(stockTransactions.userId, current.userId),
+              eq(stockTransactions.memo, currentLegacyMemo),
+            ));
+          }
+          const transactions = await tx.select().from(stockTransactions)
+            .where(eq(stockTransactions.userId, current.userId));
+          const activeRequests = await tx.select().from(transferRequests).where(and(
+            eq(transferRequests.userId, current.userId),
+            inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+          ));
+          const requestsWithReactivated = [
+            ...activeRequests.filter((request) => request.id !== current.id),
+            { ...current, status },
+          ];
+          if (!areTransferReservationsFulfillable(calculateHoldingLots(transactions), requestsWithReactivated)) {
+            throw Object.assign(new Error("이 신청을 대기 상태로 변경하면 출고 예약 수량이 보유 수량을 초과합니다"), { status: 400 });
+          }
+        }
         const updateData: { status: string; adminMemo?: string; approvedAt?: Date } = { status };
         if (adminMemo !== undefined) updateData.adminMemo = adminMemo;
         if (["approved", "rejected", "held", "출고대기중"].includes(status)) {
@@ -2805,56 +2970,71 @@ export async function registerRoutes(
           .where(eq(transferRequests.id, current.id))
           .returning();
 
-        const transferMemo = nextRequest.category
-          ? `카테고리출고신청#${nextRequest.id}`
-          : `출고신청#${nextRequest.id}`;
+        const legacyTransferMemo = nextRequest.sourceLotId
+          ? `입고건출고신청#${nextRequest.id}#${nextRequest.sourceLotId}`
+          : nextRequest.category
+            ? `카테고리출고신청#${nextRequest.id}`
+            : `출고신청#${nextRequest.id}`;
         if (status === "approved") {
-          const [existingOut] = await tx.select({ id: stockTransactions.id })
+          const [linkedOut] = await tx.select({ id: stockTransactions.id })
             .from(stockTransactions)
-            .where(
-              nextRequest.category
-                ? eq(stockTransactions.transferRequestId, nextRequest.id)
-                : and(
-                    eq(stockTransactions.userId, nextRequest.userId),
-                    eq(stockTransactions.memo, transferMemo),
-                  ),
-            )
+            .where(eq(stockTransactions.transferRequestId, nextRequest.id))
             .limit(1);
+          let existingOut = linkedOut;
+          if (!existingOut) {
+            [existingOut] = await tx.select({ id: stockTransactions.id })
+              .from(stockTransactions)
+              .where(and(
+                eq(stockTransactions.userId, nextRequest.userId),
+                eq(stockTransactions.memo, legacyTransferMemo),
+              ))
+              .limit(1);
+          }
           if (!existingOut) {
             const currentTransactions = await tx.select().from(stockTransactions)
               .where(eq(stockTransactions.userId, nextRequest.userId));
             const currentLots = calculateHoldingLots(currentTransactions);
-            const availableQuantity = currentLots
+            const otherPendingRequests = (await tx.select().from(transferRequests).where(and(
+              eq(transferRequests.userId, nextRequest.userId),
+              inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
+            ))).filter((request) => request.id !== nextRequest.id);
+            const availableLots = calculateTransferableHoldingLots(currentLots, otherPendingRequests)
               .filter((lot) =>
                 lot.name === nextRequest.stockName &&
+                (!nextRequest.sourceLotId || lot.id === nextRequest.sourceLotId) &&
                 (!nextRequest.category || lot.category === nextRequest.category)
-              )
-              .reduce((sum, lot) => sum + lot.qty, 0);
+              );
+            const availableQuantity = availableLots.reduce((sum, lot) => sum + lot.qty, 0);
             if (nextRequest.quantity > availableQuantity) {
               throw Object.assign(new Error(
                 `${nextRequest.stockName}${nextRequest.category ? ` ${nextRequest.category}` : ""} 보유 수량(${availableQuantity}주)이 부족합니다`,
               ), { status: 400 });
             }
-            await tx.insert(stockTransactions).values({
-              userId: nextRequest.userId,
-              type: "out",
-              category: nextRequest.category || "일반",
-              stockName: nextRequest.stockName,
-              quantity: nextRequest.quantity,
-              pricePerShare: nextRequest.currentPrice || nextRequest.purchasePrice,
-              memo: transferMemo,
-              transferRequestId: nextRequest.category ? nextRequest.id : null,
-            });
+            let remaining = nextRequest.quantity;
+            const outboundValues = [];
+            for (const lot of availableLots) {
+              if (remaining <= 0) break;
+              const allocated = Math.min(lot.qty, remaining);
+              outboundValues.push({
+                userId: nextRequest.userId,
+                type: "out",
+                category: lot.category,
+                stockName: nextRequest.stockName,
+                quantity: allocated,
+                pricePerShare: nextRequest.currentPrice || nextRequest.purchasePrice,
+                memo: `입고건출고신청#${nextRequest.id}#${lot.id}`,
+                transferRequestId: nextRequest.id,
+              });
+              remaining -= allocated;
+            }
+            await tx.insert(stockTransactions).values(outboundValues);
           }
         } else if (current.status === "approved") {
-          await tx.delete(stockTransactions).where(
-            nextRequest.category
-              ? eq(stockTransactions.transferRequestId, nextRequest.id)
-              : and(
-                  eq(stockTransactions.userId, nextRequest.userId),
-                  eq(stockTransactions.memo, transferMemo),
-                ),
-          );
+          await tx.delete(stockTransactions).where(eq(stockTransactions.transferRequestId, nextRequest.id));
+          await tx.delete(stockTransactions).where(and(
+            eq(stockTransactions.userId, nextRequest.userId),
+            eq(stockTransactions.memo, legacyTransferMemo),
+          ));
         }
 
         return nextRequest;
@@ -3476,44 +3656,51 @@ export async function registerRoutes(
         if (status === "approved") {
           const senderTransactions = await tx.select().from(stockTransactions)
             .where(eq(stockTransactions.userId, transfer.fromUserId));
-          const stockLots = calculateHoldingLots(senderTransactions)
-            .filter((lot) => lot.name === transfer.stockName);
-          const totalHolding = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
+          const holdingLots = calculateHoldingLots(senderTransactions);
           const pendingRequests = await tx.select().from(transferRequests).where(and(
             eq(transferRequests.userId, transfer.fromUserId),
             eq(transferRequests.stockName, transfer.stockName),
             inArray(transferRequests.status, ["pending", "출고대기중", "held"]),
           ));
-          const reservedQuantity = pendingRequests.reduce((sum, request) => sum + request.quantity, 0);
-          const available = Math.max(0, totalHolding - reservedQuantity);
+          const stockLots = calculateTransferableHoldingLots(holdingLots, pendingRequests)
+            .filter((lot) => lot.name === transfer.stockName);
+          const available = stockLots.reduce((sum, lot) => sum + lot.qty, 0);
           if (transfer.quantity > available) {
             throw Object.assign(new Error(
               `보내는 회원의 ${transfer.stockName} 출고 신청 수량을 제외한 보유 수량(${available}주)이 부족합니다`,
             ), { status: 400 });
           }
-          const totalCost = stockLots.reduce((sum, lot) => sum + lot.qty * lot.pricePerShare, 0);
-          const avgPrice = totalHolding > 0 ? Math.round(totalCost / totalHolding) : 0;
           const [fromUser] = await tx.select({ username: users.username }).from(users)
             .where(eq(users.id, transfer.fromUserId));
 
-          await tx.insert(stockTransactions).values({
-            userId: transfer.fromUserId,
-            type: "출고",
-            stockName: transfer.stockName,
-            quantity: transfer.quantity,
-            pricePerShare: avgPrice,
-            category: "주식이전",
-            memo: `회원 이전 → ${transfer.toUsername}`,
-          });
-          await tx.insert(stockTransactions).values({
-            userId: transfer.toUserId,
-            type: "입고",
-            stockName: transfer.stockName,
-            quantity: transfer.quantity,
-            pricePerShare: avgPrice,
-            category: "주식이전",
-            memo: `회원 이전 ← ${fromUser?.username || transfer.fromUserId}`,
-          });
+          let remaining = transfer.quantity;
+          const outgoingValues = [];
+          const incomingValues = [];
+          for (const lot of stockLots) {
+            if (remaining <= 0) break;
+            const allocated = Math.min(lot.qty, remaining);
+            outgoingValues.push({
+              userId: transfer.fromUserId,
+              type: "출고",
+              stockName: transfer.stockName,
+              quantity: allocated,
+              pricePerShare: lot.pricePerShare,
+              category: "주식이전",
+              memo: `입고건차감#${lot.id}#회원 이전 → ${transfer.toUsername}`,
+            });
+            incomingValues.push({
+              userId: transfer.toUserId,
+              type: "입고",
+              stockName: transfer.stockName,
+              quantity: allocated,
+              pricePerShare: lot.pricePerShare,
+              category: "주식이전",
+              memo: `회원 이전 ← ${fromUser?.username || transfer.fromUserId}`,
+            });
+            remaining -= allocated;
+          }
+          await tx.insert(stockTransactions).values(outgoingValues);
+          await tx.insert(stockTransactions).values(incomingValues);
         }
 
         const updateData: { status: string; processedAt: Date; adminMemo?: string } = {

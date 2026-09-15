@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient, getQueryFn } from "@/lib/queryClient";
+import { playNotificationSound, unlockNotificationSound } from "@/lib/notification-sound";
 import { STOCK_CATEGORIES, KOREAN_BANKS } from "@shared/schema";
 import { StockIcon } from "@/components/stock-icon";
 import type { User, StockTransaction, TransferRequest, IpoStock, DomainGroup, LoginLog, DomainFallbackUrl, BlockedIp, StockMemberTransfer } from "@shared/schema";
@@ -1189,6 +1190,7 @@ export default function DemoAdminPage() {
   };
 
   const [activeSection, setActiveSectionState] = useState<AdminSection>(getHashSection());
+  const activeSectionRef = useRef<AdminSection>(activeSection);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
@@ -1215,38 +1217,35 @@ export default function DemoAdminPage() {
   const notifiedChatMessageIdsRef = useRef<Set<string>>(new Set());
 
   const setActiveSection = (section: AdminSection) => {
+    activeSectionRef.current = section;
     setActiveSectionState(section);
     window.history.pushState(null, "", `#${section}`);
   };
 
   useEffect(() => {
     const handlePopState = () => {
-      setActiveSectionState(getHashSection());
+      const section = getHashSection();
+      activeSectionRef.current = section;
+      setActiveSectionState(section);
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  const playNotificationSound = () => {
-    try {
-      const ctx = new AudioContext();
-      const playBeep = (freq: number, start: number, duration: number) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
-        gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
-        osc.start(ctx.currentTime + start);
-        osc.stop(ctx.currentTime + start + duration);
-      };
-      playBeep(880, 0, 0.15);
-      playBeep(1100, 0.18, 0.15);
-      playBeep(1320, 0.36, 0.25);
-    } catch {}
-  };
+  useEffect(() => {
+    if (!chatSoundEnabled) return;
+    const unlock = () => {
+      void unlockNotificationSound();
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [chatSoundEnabled]);
 
   const toggleSound = () => {
     setSoundEnabled(prev => {
@@ -1285,6 +1284,7 @@ export default function DemoAdminPage() {
       const next = !prev;
       localStorage.setItem("adminChatSoundEnabled", String(next));
       chatSoundEnabledRef.current = next;
+      if (next) void unlockNotificationSound().then(() => playNotificationSound());
       return next;
     });
   };
@@ -1709,7 +1709,12 @@ export default function DemoAdminPage() {
           }
           if (parsed.data.senderRole === "user") {
             const currentRoom = selectedChatRoomRef.current;
-            if (currentRoom && parsed.data.roomId === currentRoom) {
+            if (
+              currentRoom &&
+              parsed.data.roomId === currentRoom &&
+              activeSectionRef.current === "chat" &&
+              document.visibilityState === "visible"
+            ) {
               fetch(`/api/chat/rooms/${currentRoom}/mark-read`, { method: "POST", credentials: "include" }).then(() => {
                 queryClient.invalidateQueries({ queryKey: ["/api/chat/rooms"] });
               }).catch(() => {});
@@ -1728,7 +1733,7 @@ export default function DemoAdminPage() {
               if (oldestId) notifiedChatMessageIdsRef.current.delete(oldestId);
             }
           }
-          if (chatSoundEnabledRef.current) playNotificationSound();
+          if (chatSoundEnabledRef.current) void playNotificationSound();
           toast({
             title: "새 상담 메시지",
             description: `${parsed.data.userName}: ${parsed.data.message.substring(0, 30)}${parsed.data.message.length > 30 ? "..." : ""}`,
@@ -1737,7 +1742,7 @@ export default function DemoAdminPage() {
         }
         if (parsed.type === "transfer_update" && parsed.data?.action === "new_request") {
           if (transferSoundEnabledRef.current) {
-            playNotificationSound();
+            void playNotificationSound();
           }
           toast({
             title: "새 대체출고 신청",
@@ -3381,7 +3386,10 @@ export default function DemoAdminPage() {
                               e.target.style.height = "auto";
                               e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
                             }}
-                            onKeyDown={(e: any) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChatSend(); } }}
+                            onKeyDown={(e: any) => {
+                              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChatSend(); }
+                            }}
                             placeholder="답변을 입력하세요... (Shift+Enter로 줄바꿈)"
                             rows={1}
                             className="resize-none min-h-[40px] py-2 leading-snug bg-white border-gray-200 text-gray-900 placeholder:text-gray-400"
