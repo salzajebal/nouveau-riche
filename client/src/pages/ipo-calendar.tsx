@@ -826,6 +826,8 @@ function CalendarIframeSection() {
   const defaultIdx = requestedIdx >= 0 ? requestedIdx : todayIdx;
   const [monthIdx, setMonthIdx] = useState(defaultIdx >= 0 ? defaultIdx : MONTH_OPTIONS.length - 1);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const upcomingTabRef = useRef<SidebarTab>("tobe");
+  const upcomingPageRef = useRef(1);
   const { data: ipoApiData } = useQuery<IpoCalendarApiResponse>({
     queryKey: ["/api/market/ipo-calendar"],
     refetchInterval: 15 * 1000,
@@ -933,6 +935,222 @@ function CalendarIframeSection() {
       const monthKey = `${selectedMonth.year}-${String(selectedMonth.month).padStart(2, "0")}`;
       const parsedEvents = ipoApiData?.naverData?.calendarMonths?.[monthKey] || [];
       renderParsedCalendarMonth(doc, selectedMonth.year, selectedMonth.month, parsedEvents);
+    }
+
+    const upcomingTitle = Array.from(doc.querySelectorAll("h4")).find((heading) =>
+      heading.textContent?.includes("다가오는 청약 종목")
+    );
+    const upcomingSection = upcomingTitle?.parentElement as HTMLElement | null;
+    if (upcomingSection && ipoApiData?.naverData) {
+      const beingItems = ipoApiData.naverData.beingIPOList || [];
+      const toBeItems = ipoApiData.naverData.toBeIPOList || [];
+      const pageSize = 5;
+
+      if (!doc.getElementById("nouveau-upcoming-style")) {
+        const style = doc.createElement("style");
+        style.id = "nouveau-upcoming-style";
+        style.textContent = `
+          .nouveau-upcoming-title { margin:0 0 20px;font-size:20px;font-weight:700;color:#14181B; }
+          .nouveau-upcoming-tabs { display:flex;border-bottom:1px solid #E0E2E4;margin-bottom:24px; }
+          .nouveau-upcoming-tab { flex:1;padding:14px 4px;border:0;border-bottom:3px solid transparent;background:#fff;color:#7D8083;font-size:15px;font-weight:600;cursor:pointer; }
+          .nouveau-upcoming-tab[aria-selected=true] { border-bottom-color:#14181B;color:#14181B;font-weight:700; }
+          .nouveau-upcoming-list { display:flex;flex-direction:column;gap:22px; }
+          .nouveau-upcoming-date { display:flex;align-items:center;gap:10px;margin-bottom:10px;color:#585B5E;font-size:14px; }
+          .nouveau-upcoming-date strong { color:#14181B;font-size:16px; }
+          .nouveau-upcoming-card { width:100%;display:flex;align-items:center;gap:14px;padding:18px 16px;border:1px solid #E0E2E4;border-radius:10px;background:#fff;text-align:left;cursor:pointer; }
+          .nouveau-upcoming-card:hover,.nouveau-upcoming-card:focus-visible { border-color:#09ACFF;outline:none;box-shadow:0 0 0 3px rgba(9,172,255,.12); }
+          .nouveau-upcoming-logo { width:42px;height:42px;border-radius:50%;object-fit:contain;border:1px solid #F0F1F2;background:#fff;flex:none; }
+          .nouveau-upcoming-logo-fallback { width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#E6E8EA;color:#9D9FA0;font-size:13px;font-weight:700;flex:none; }
+          .nouveau-upcoming-info { min-width:0;flex:1; }
+          .nouveau-upcoming-name { display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#14181B;font-size:16px;font-weight:700; }
+          .nouveau-upcoming-detail { display:block;margin-top:3px;color:#585B5E;font-size:14px; }
+          .nouveau-upcoming-competition { display:block;margin-top:2px;color:#7D8083;font-size:13px; }
+          .nouveau-upcoming-arrow { color:#D1D3D5;font-size:30px;font-weight:300;line-height:1; }
+          .nouveau-upcoming-empty { padding:38px 12px;border:1px solid #E0E2E4;border-radius:10px;text-align:center;color:#9D9FA0;font-size:14px; }
+          .nouveau-upcoming-pages { display:flex;align-items:center;justify-content:center;gap:6px;margin-top:24px; }
+          .nouveau-upcoming-page { min-width:32px;height:32px;border:1px solid transparent;background:#fff;color:#7D8083;font-size:14px;cursor:pointer; }
+          .nouveau-upcoming-page[aria-current=page] { color:#14181B;font-weight:700; }
+          .nouveau-upcoming-page.nav { border-color:#BFC0C1;border-radius:3px;font-size:20px;line-height:1; }
+          .nouveau-upcoming-page:disabled { color:#D1D3D5;border-color:#E6E8EA;cursor:not-allowed; }
+          .nouveau-ipo-modal-backdrop { position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(20,24,27,.45); }
+          .nouveau-ipo-modal { width:min(420px,100%);border-radius:14px;background:#fff;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.2); }
+          .nouveau-ipo-modal-head { display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px; }
+          .nouveau-ipo-modal-head strong { font-size:20px;color:#14181B; }
+          .nouveau-ipo-modal-close { width:32px;height:32px;border:0;border-radius:50%;background:#F3F5F6;font-size:20px;cursor:pointer; }
+          .nouveau-ipo-modal-row { display:flex;justify-content:space-between;gap:20px;padding:12px 0;border-top:1px solid #E6E8EA;font-size:14px; }
+          .nouveau-ipo-modal-row span:first-child { color:#9D9FA0; }
+          .nouveau-ipo-modal-row span:last-child { color:#14181B;font-weight:600;text-align:right; }
+        `;
+        doc.head.appendChild(style);
+      }
+
+      const showDetails = (ipo: NaverIpoItem) => {
+        doc.querySelector(".nouveau-ipo-modal-backdrop")?.remove();
+        const backdrop = doc.createElement("div");
+        backdrop.className = "nouveau-ipo-modal-backdrop";
+        backdrop.dataset.testid = "upcoming-ipo-dialog";
+        const modal = doc.createElement("div");
+        modal.className = "nouveau-ipo-modal";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+        const head = doc.createElement("div");
+        head.className = "nouveau-ipo-modal-head";
+        const name = doc.createElement("strong");
+        name.textContent = ipo.stockName;
+        const close = doc.createElement("button");
+        close.type = "button";
+        close.className = "nouveau-ipo-modal-close";
+        close.textContent = "×";
+        close.setAttribute("aria-label", "상세정보 닫기");
+        close.onclick = () => backdrop.remove();
+        head.append(name, close);
+        modal.appendChild(head);
+        const rows = [
+          ["청약 기간", `${ipo.offeringStartAt ? fmtMD(ipo.offeringStartAt) : "-"} ~ ${ipo.closedDate ? fmtMD(ipo.closedDate) : "-"}`],
+          ["공모가", fmtPrice(ipo.minExpectedOfferPrice, ipo.maxExpectedOfferPrice, ipo.finalOfferPrice)],
+          ["기관경쟁률", ipo.instCompetitiveness != null ? `${Number(ipo.instCompetitiveness).toLocaleString("ko-KR")}:1` : "-"],
+        ];
+        rows.forEach(([label, value]) => {
+          const row = doc.createElement("div");
+          row.className = "nouveau-ipo-modal-row";
+          const labelNode = doc.createElement("span");
+          labelNode.textContent = label;
+          const valueNode = doc.createElement("span");
+          valueNode.textContent = value;
+          row.append(labelNode, valueNode);
+          modal.appendChild(row);
+        });
+        backdrop.onclick = (event) => { if (event.target === backdrop) backdrop.remove(); };
+        backdrop.appendChild(modal);
+        doc.body.appendChild(backdrop);
+      };
+
+      const renderUpcoming = () => {
+        const activeItems = upcomingTabRef.current === "being" ? beingItems : toBeItems;
+        const pageCount = Math.max(1, Math.ceil(activeItems.length / pageSize));
+        upcomingPageRef.current = Math.min(Math.max(1, upcomingPageRef.current), pageCount);
+        const start = (upcomingPageRef.current - 1) * pageSize;
+
+        upcomingSection.replaceChildren();
+        const title = doc.createElement("h4");
+        title.className = "nouveau-upcoming-title";
+        title.textContent = "다가오는 청약 종목";
+        upcomingSection.appendChild(title);
+
+        const tabs = doc.createElement("div");
+        tabs.className = "nouveau-upcoming-tabs";
+        ([
+          ["being", `청약진행중 ${beingItems.length}`],
+          ["tobe", `청약예정 ${toBeItems.length}`],
+        ] as const).forEach(([tabKey, label]) => {
+          const button = doc.createElement("button");
+          button.type = "button";
+          button.className = "nouveau-upcoming-tab";
+          button.dataset.testid = `upcoming-tab-${tabKey}`;
+          button.textContent = label;
+          button.setAttribute("aria-selected", String(upcomingTabRef.current === tabKey));
+          button.onclick = () => {
+            upcomingTabRef.current = tabKey;
+            upcomingPageRef.current = 1;
+            renderUpcoming();
+          };
+          tabs.appendChild(button);
+        });
+        upcomingSection.appendChild(tabs);
+
+        const list = doc.createElement("div");
+        list.className = "nouveau-upcoming-list";
+        const pageItems = activeItems.slice(start, start + pageSize);
+        if (pageItems.length === 0) {
+          const empty = doc.createElement("div");
+          empty.className = "nouveau-upcoming-empty";
+          empty.textContent = "해당 청약 종목이 없습니다.";
+          list.appendChild(empty);
+        }
+        pageItems.forEach((ipo, index) => {
+          const item = doc.createElement("div");
+          const date = doc.createElement("div");
+          date.className = "nouveau-upcoming-date";
+          const dday = doc.createElement("strong");
+          dday.textContent = upcomingTabRef.current === "being" ? "진행중" : (fmtDDay(ipo.offeringStartAt) || "예정");
+          const schedule = doc.createElement("span");
+          schedule.textContent = upcomingTabRef.current === "being"
+            ? `${ipo.closedDate ? fmtMD(ipo.closedDate) : "-"} 마감`
+            : `${ipo.offeringStartAt ? fmtMD(ipo.offeringStartAt) : "-"} 예정`;
+          date.append(dday, schedule);
+
+          const card = doc.createElement("button");
+          card.type = "button";
+          card.className = "nouveau-upcoming-card";
+          card.dataset.testid = `upcoming-card-${index}`;
+          card.setAttribute("aria-label", `${ipo.stockName} 상세정보 보기`);
+          if (ipo.logoUrl) {
+            const logo = doc.createElement("img");
+            logo.className = "nouveau-upcoming-logo";
+            logo.src = ipo.logoUrl;
+            logo.alt = "";
+            logo.onerror = () => {
+              const fallback = doc.createElement("span");
+              fallback.className = "nouveau-upcoming-logo-fallback";
+              fallback.textContent = ipo.stockName.slice(0, 1);
+              logo.replaceWith(fallback);
+            };
+            card.appendChild(logo);
+          } else {
+            const fallback = doc.createElement("span");
+            fallback.className = "nouveau-upcoming-logo-fallback";
+            fallback.textContent = ipo.stockName.slice(0, 1);
+            card.appendChild(fallback);
+          }
+          const info = doc.createElement("span");
+          info.className = "nouveau-upcoming-info";
+          const stockName = doc.createElement("span");
+          stockName.className = "nouveau-upcoming-name";
+          stockName.textContent = ipo.stockName;
+          const price = doc.createElement("span");
+          price.className = "nouveau-upcoming-detail";
+          price.textContent = `공모가 ${fmtPrice(ipo.minExpectedOfferPrice, ipo.maxExpectedOfferPrice, ipo.finalOfferPrice)}`;
+          const competition = doc.createElement("span");
+          competition.className = "nouveau-upcoming-competition";
+          competition.textContent = `기관경쟁률 ${ipo.instCompetitiveness != null ? `${Number(ipo.instCompetitiveness).toLocaleString("ko-KR")}:1` : "-"}`;
+          info.append(stockName, price, competition);
+          const arrow = doc.createElement("span");
+          arrow.className = "nouveau-upcoming-arrow";
+          arrow.textContent = "›";
+          card.append(info, arrow);
+          card.onclick = () => showDetails(ipo);
+          item.append(date, card);
+          list.appendChild(item);
+        });
+        upcomingSection.appendChild(list);
+
+        if (activeItems.length > pageSize) {
+          const pagination = doc.createElement("div");
+          pagination.className = "nouveau-upcoming-pages";
+          pagination.dataset.testid = "upcoming-pagination";
+          const makePageButton = (label: string, page: number, nav = false) => {
+            const button = doc.createElement("button");
+            button.type = "button";
+            button.className = `nouveau-upcoming-page${nav ? " nav" : ""}`;
+            button.textContent = label;
+            button.disabled = page < 1 || page > pageCount;
+            if (!nav && page === upcomingPageRef.current) button.setAttribute("aria-current", "page");
+            button.onclick = () => {
+              upcomingPageRef.current = page;
+              renderUpcoming();
+            };
+            return button;
+          };
+          pagination.appendChild(makePageButton("‹", upcomingPageRef.current - 1, true));
+          for (let page = 1; page <= pageCount; page += 1) {
+            pagination.appendChild(makePageButton(String(page), page));
+          }
+          pagination.appendChild(makePageButton("›", upcomingPageRef.current + 1, true));
+          upcomingSection.appendChild(pagination);
+        }
+      };
+
+      renderUpcoming();
     }
 
     const popularStocks: any[] = ipoApiData?.naverData?.popularStocks || [];
