@@ -2359,6 +2359,9 @@ export async function registerRoutes(
             throw Object.assign(new Error("선택한 입고 건의 카테고리가 일치하지 않습니다"), { status: 400 });
           }
           requestedCategory = sourceLot.category;
+          if (requestedCategory !== "S.O") {
+            throw Object.assign(new Error("S.O로 입고된 주식만 주식 이전을 신청할 수 있습니다"), { status: 400 });
+          }
           const availableLot = calculateTransferableHoldingLots(holdingLots, pendingRequests)
             .find((lot) => lot.id === requestedSourceLotId);
           const available = availableLot?.qty || 0;
@@ -2384,6 +2387,9 @@ export async function registerRoutes(
             } else {
               throw Object.assign(new Error(`${requestedStock}의 출고 카테고리를 선택해주세요`), { status: 400 });
             }
+          }
+          if (requestedCategory !== "S.O") {
+            throw Object.assign(new Error("S.O로 입고된 주식만 주식 이전을 신청할 수 있습니다"), { status: 400 });
           }
           const selectedHolding = holdingsMap.get(holdingKey(requestedStock, requestedCategory));
           if (!selectedHolding?.qty) {

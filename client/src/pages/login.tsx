@@ -82,7 +82,7 @@ export default function LoginPage() {
   const loginHoldings: { name: string; category: string; qty: number; avgPrice: number }[] = (() => {
     const lots = calculateHoldingLots(myTransactions);
     const map = new Map<string, { name: string; category: string; qty: number; totalCost: number }>();
-    lots.forEach((lot) => {
+    lots.filter((lot) => lot.category === "S.O").forEach((lot) => {
       const key = `${lot.name}\u0000${lot.category ?? ""}`;
       const holding = map.get(key) || { name: lot.name, category: lot.category ?? "", qty: 0, totalCost: 0 };
       holding.qty += lot.qty;
